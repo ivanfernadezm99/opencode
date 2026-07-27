@@ -27,7 +27,6 @@ export default {
           \`time_updated\` integer NOT NULL
         );
       `)
-      yield* tx.run(`ALTER TABLE \`token_balance\` ADD \`lastAllowanceMonth\` text;`)
     })
   },
 } satisfies DatabaseMigration.Migration

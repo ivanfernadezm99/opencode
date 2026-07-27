@@ -29,6 +29,7 @@ import { DbCommand } from "./cli/cmd/db"
 import { errorMessage } from "./util/error"
 import { PluginCommand } from "./cli/cmd/plug"
 import { Heap } from "./cli/heap"
+import { CronCommand } from "./cli/cron"
 
 const args = hideBin(process.argv)
 
@@ -101,6 +102,7 @@ const cli = yargs(args)
   .command(SessionCommand)
   .command(PluginCommand)
   .command(DbCommand)
+  .command(CronCommand)
   .fail((msg, err) => {
     if (
       msg?.startsWith("Unknown argument") ||
