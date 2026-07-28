@@ -1,0 +1,246 @@
+- generic [active] [ref=e1]:
+  - generic [ref=e2]:
+    - generic [ref=e3]:
+      - generic [ref=e5]:
+        - generic [ref=e6] [cursor=pointer]: ⚲
+        - textbox "⚲" [ref=e7]:
+          - /placeholder: Búsqueda
+      - generic [ref=e8]:
+        - link "Iván José Fernández Michonovich" [ref=e9] [cursor=pointer]:
+          - /url: /users/471
+          - img "Iván José Fernández Michonovich" [ref=e10]
+        - link "ifernandez" [ref=e11] [cursor=pointer]:
+          - /url: /users/471
+      - heading "Proyecto" [level=3] [ref=e12]
+      - list [ref=e14]:
+        - listitem [ref=e15]:
+          - link "Proyectos" [ref=e16] [cursor=pointer]:
+            - /url: /projects
+        - listitem [ref=e17]:
+          - link "Actividad" [ref=e18] [cursor=pointer]:
+            - /url: /activity
+        - listitem [ref=e19]:
+          - link "Peticiones" [ref=e20] [cursor=pointer]:
+            - /url: /issues
+        - listitem [ref=e21]:
+          - link "Tiempo dedicado" [ref=e22] [cursor=pointer]:
+            - /url: /time_entries
+        - listitem [ref=e23]:
+          - link "Gantt" [ref=e24] [cursor=pointer]:
+            - /url: /issues/gantt
+        - listitem [ref=e25]:
+          - link "Calendario" [ref=e26] [cursor=pointer]:
+            - /url: /issues/calendar
+        - listitem [ref=e27]:
+          - link "Kanban" [ref=e28] [cursor=pointer]:
+            - /url: /kanban
+      - heading "General" [level=3] [ref=e29]
+      - list [ref=e31]:
+        - listitem [ref=e32]:
+          - link "Inicio" [ref=e33] [cursor=pointer]:
+            - /url: /
+        - listitem [ref=e34]:
+          - link "Mi página" [ref=e35] [cursor=pointer]:
+            - /url: /my/page
+        - listitem [ref=e36]:
+          - link "Proyectos" [ref=e37] [cursor=pointer]:
+            - /url: /projects
+        - listitem [ref=e38]:
+          - link [ref=e39] [cursor=pointer]:
+            - /url: "#"
+            - generic [ref=e40]: 
+          - list [ref=e41]:
+            - listitem [ref=e42]:
+              - link "Redmine Guide" [ref=e43] [cursor=pointer]:
+                - /url: https://www.redmine.org/guide
+            - listitem [ref=e44]:
+              - link "Redmine macros" [ref=e45] [cursor=pointer]:
+                - /url: /help/macros
+      - heading "Perfil" [level=3] [ref=e46]
+      - list [ref=e48]:
+        - listitem [ref=e49]:
+          - link "Agenda" [ref=e50] [cursor=pointer]:
+            - /url: /work_time/index
+        - listitem [ref=e51]:
+          - link "Mi cuenta" [ref=e52] [cursor=pointer]:
+            - /url: /my/account
+        - listitem [ref=e53]:
+          - link "Terminar sesión" [ref=e54] [cursor=pointer]:
+            - /url: /logout
+    - generic [ref=e56]:
+      - generic [ref=e57]:
+        - link "≡" [ref=e58] [cursor=pointer]:
+          - /url: "#"
+        - generic [ref=e59]:
+          - generic [ref=e60] [cursor=pointer]: ^ Ir al proyecto...
+          - text: ✓
+        - text:  
+      - generic [ref=e62]:
+        - link " Tiempo dedicado" [ref=e64] [cursor=pointer]:
+          - /url: /time_entries/new
+        - heading "Tiempo dedicado" [level=2] [ref=e65]
+        - generic [ref=e66]:
+          - generic [ref=e67]:
+            - generic [ref=e68]:
+              - group "Filtros" [ref=e69]:
+                - generic [ref=e70] [cursor=pointer]: Filtros
+                - generic [ref=e71]:
+                  - table [ref=e72]:
+                    - rowgroup [ref=e73]:
+                      - row "Usuario igual << yo mismo >> " [ref=e74]:
+                        - cell "Usuario" [ref=e75]:
+                          - checkbox "Usuario" [checked] [ref=e76] [cursor=pointer]: ✔
+                          - text: Usuario
+                        - cell "igual" [ref=e77]:
+                          - combobox [ref=e78]:
+                            - option "igual" [selected]
+                            - option "no igual"
+                            - option "ninguno"
+                            - option "todos"
+                        - cell "<< yo mismo >> " [ref=e79]:
+                          - generic [ref=e80]:
+                            - combobox [ref=e81]:
+                              - option "<< yo mismo >>" [selected]
+                              - option "Agustin Dedyn"
+                              - option "Agustin Gonzalez"
+                              - option "Alejandra Daiez"
+                              - option "Andres Suarez"
+                              - option "Carolina Pecob"
+                              - option "Cecilia Colla"
+                              - option "Claudio Olivares"
+                              - option "Daniel Palombo"
+                              - option "Enzo Miranda"
+                              - option "Eric Casanova"
+                              - option "Esteban Arlando"
+                              - option "Gonzalo Figueroa"
+                              - option "Iván José Fernández Michonovich"
+                              - option "Jairo Carrasco"
+                              - option "Jessica Alejandro"
+                              - option "Juan Jose Breuer Moreno"
+                              - option "Karen Villarreal"
+                              - option "Kevin Wastavino"
+                              - option "Laura Revel"
+                              - option "Leonardo Pineda"
+                              - option "Luciano Leyria"
+                              - option "Miguel Gutierrez"
+                              - option "Muaricio Ferrieres"
+                              - option "Norman Orozco"
+                              - option "R Descalzi"
+                              - option "Raul Ahumada"
+                              - option "Ricardo Diaz"
+                              - option "Santiago Costa"
+                              - option "Stefania Sanchiz"
+                              - option "Tomas Jurado"
+                              - option "Vitor Fugita"
+                              - option "Anónimo"
+                            - generic [ref=e82] [cursor=pointer]: 
+                      - row "Fecha igual 2026-07-25" [ref=e83]:
+                        - cell "Fecha" [ref=e84]:
+                          - checkbox "Fecha" [checked] [ref=e85] [cursor=pointer]: ✔
+                          - text: Fecha
+                        - cell "igual" [ref=e86]:
+                          - combobox [ref=e87]:
+                            - option "igual" [selected]
+                            - option ">="
+                            - option "<="
+                            - option "entre"
+                            - option "hace menos de"
+                            - option "hace más de"
+                            - option "en los anteriores"
+                            - option "hace"
+                            - option "hoy"
+                            - option "ayer"
+                            - option "esta semana"
+                            - option "última semana"
+                            - option "en las últimas 2 semanas"
+                            - option "este mes"
+                            - option "último mes"
+                            - option "este año"
+                            - option "ninguno"
+                            - option "todos"
+                        - cell "2026-07-25" [ref=e88]:
+                          - textbox [ref=e90]: 2026-07-25
+                  - generic [ref=e91]:
+                    - text: Añadir el filtro
+                    - combobox "Añadir el filtro" [ref=e92]:
+                      - option [selected]
+                      - option "Proyecto"
+                      - option "Petición"
+                      - option "Usuario" [disabled]
+                      - option "Autor"
+                      - option "Actividad"
+                      - option "Comentario"
+                      - option "Horas"
+                      - option "Fecha" [disabled]
+                      - option "Tipo de la petición"
+                      - option "Estado de la petición"
+                      - option "Versión prevista de la petición"
+                      - option "Sector de la petición"
+                      - option "ID de la petición"
+                      - option "Cliente de la petición"
+                      - option "Sprint de la petición"
+                      - option "Servicio de la petición"
+                      - option "Tipo de Servicio de la petición"
+                      - option "Horas Mes de la petición"
+                      - option "Tecnología de la petición"
+                      - option "Nombre Servicio de la petición"
+                      - option "Colaborador de la petición"
+                      - option "Versión de la petición"
+                      - option "Tiempo Estimado Real de la petición"
+                      - option "Instancia/Site de la petición"
+                      - option "Interfaz de la petición"
+                      - option "Parent_Tracker de la petición"
+                      - option "Motivo de cancelación de la petición"
+                      - option "Colaborador Relacionado de la petición"
+                      - option "Impacto de la petición"
+                      - option "Nivel de Ocurrencia de la petición"
+                      - option "País de la petición"
+                      - option "Centro de Costo de la petición"
+                      - option "Evaluación de la petición"
+                      - option "Sales Executive de la petición"
+                      - option "Pais de la petición"
+                      - option "Cliente Soporte a la Venta de la petición"
+                      - option "Tecnologia Soporte a la Venta de la petición"
+                      - option "Consultoría de la petición"
+                      - option "Iteracion Rechazo QA Interno de la petición"
+                      - option "Iteracion Rechazo UAT de la petición"
+                      - option "Iteracion Rechazo y Rollback de la petición"
+                      - option "Tags de la petición"
+                      - option "Estado del proyecto"
+                      - option "Fecha de inicio del proyecto"
+                      - option "Fecha de fin del proyecto"
+                      - option "Tipo de servicio del proyecto"
+                      - option "Tecnología del proyecto"
+                      - option "Tiempo Estimado Real del proyecto"
+                      - option "Responsable del proyecto"
+              - group "Opciones" [ref=e93]:
+                - generic [ref=e94] [cursor=pointer]: Opciones
+                - text: ✔
+            - paragraph [ref=e95]:
+              - link " Aceptar" [ref=e96] [cursor=pointer]:
+                - /url: "#"
+              - link " Anular" [ref=e97] [cursor=pointer]:
+                - /url: /time_entries?set_filter=1&sort=
+              - link " Guardar" [ref=e98] [cursor=pointer]:
+                - /url: "#"
+          - list [ref=e100]:
+            - listitem [ref=e101]:
+              - link "Detalles" [ref=e102] [cursor=pointer]:
+                - /url: /time_entries?f%5B%5D=user_id&f%5B%5D=spent_on&op%5Bspent_on%5D=%3D&op%5Buser_id%5D=%3D&set_filter=1&v%5Bspent_on%5D%5B%5D=2026-07-25&v%5Buser_id%5D%5B%5D=me
+            - listitem [ref=e103]:
+              - link "Informe" [ref=e104] [cursor=pointer]:
+                - /url: /time_entries/report?f%5B%5D=user_id&f%5B%5D=spent_on&op%5Bspent_on%5D=%3D&op%5Buser_id%5D=%3D&set_filter=1&v%5Bspent_on%5D%5B%5D=2026-07-25&v%5Buser_id%5D%5B%5D=me
+        - paragraph [ref=e105]: Ningún dato disponible
+        - text: 
+      - generic [ref=e106]:
+        - text: Powered by
+        - link "Bitnami Redmine Stack" [ref=e107] [cursor=pointer]:
+          - /url: https://bitnami.com/stack/redmine
+        - text: © 2006-2020 Jean-Philippe Lang
+  - log [ref=e108]
+  - log [ref=e109]
+  - log [ref=e110]
+  - log [ref=e111]
+  - log [ref=e112]
+  - log [ref=e113]
+  - log [ref=e114]

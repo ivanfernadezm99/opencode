@@ -1,0 +1,111 @@
+- generic [active] [ref=e1]:
+  - generic [ref=e2]:
+    - generic [ref=e3]:
+      - generic [ref=e5]:
+        - generic [ref=e6] [cursor=pointer]: ⚲
+        - textbox "⚲" [ref=e7]:
+          - /placeholder: Búsqueda
+      - generic [ref=e8]:
+        - link "Iván José Fernández Michonovich" [ref=e9] [cursor=pointer]:
+          - /url: /users/471
+          - img "Iván José Fernández Michonovich" [ref=e10]
+        - link "ifernandez" [ref=e11] [cursor=pointer]:
+          - /url: /users/471
+      - heading "General" [level=3] [ref=e12]
+      - list [ref=e14]:
+        - listitem [ref=e15]:
+          - link "Inicio" [ref=e16] [cursor=pointer]:
+            - /url: /
+        - listitem [ref=e17]:
+          - link "Mi página" [ref=e18] [cursor=pointer]:
+            - /url: /my/page
+        - listitem [ref=e19]:
+          - link "Proyectos" [ref=e20] [cursor=pointer]:
+            - /url: /projects
+        - listitem [ref=e21]:
+          - link [ref=e22] [cursor=pointer]:
+            - /url: "#"
+            - generic [ref=e23]: 
+          - list [ref=e24]:
+            - listitem [ref=e25]:
+              - link "Redmine Guide" [ref=e26] [cursor=pointer]:
+                - /url: https://www.redmine.org/guide
+            - listitem [ref=e27]:
+              - link "Redmine macros" [ref=e28] [cursor=pointer]:
+                - /url: /help/macros
+      - heading "Perfil" [level=3] [ref=e29]
+      - list [ref=e31]:
+        - listitem [ref=e32]:
+          - link "Agenda" [ref=e33] [cursor=pointer]:
+            - /url: /work_time/index
+        - listitem [ref=e34]:
+          - link "Mi cuenta" [ref=e35] [cursor=pointer]:
+            - /url: /my/account
+        - listitem [ref=e36]:
+          - link "Terminar sesión" [ref=e37] [cursor=pointer]:
+            - /url: /logout
+    - generic [ref=e39]:
+      - generic [ref=e40]:
+        - link "≡" [ref=e41] [cursor=pointer]:
+          - /url: "#"
+        - generic [ref=e43] [cursor=pointer]: ^ Ir al proyecto...
+      - generic [ref=e45]:
+        - generic [ref=e47]:
+          - text: "Añadir:"
+          - combobox "Añadir" [ref=e48]:
+            - option [selected]
+            - option "Peticiones que me están asignadas" [disabled]
+            - option "Peticiones registradas por mí" [disabled]
+            - option "Updated issues"
+            - option "Peticiones monitorizadas"
+            - option "Peticiones"
+            - option "Últimas noticias"
+            - option "Calendario"
+            - option "Documentos"
+            - option "Tiempo dedicado"
+            - option "Actividad"
+        - heading "Mi página" [level=2] [ref=e49]
+        - generic [ref=e50]:
+          - generic [ref=e53]:
+            - generic [ref=e54]:
+              - generic "Mover" [ref=e55]: 
+              - link " Borrar" [ref=e56] [cursor=pointer]:
+                - /url: /my/remove_block?block=issuesassignedtome
+            - link " Opciones" [ref=e58] [cursor=pointer]:
+              - /url: "#"
+            - heading "Peticiones que me están asignadas (0)" [level=3] [ref=e59]:
+              - link "Peticiones que me están asignadas" [ref=e60] [cursor=pointer]:
+                - /url: /issues?c%5B%5D=project&c%5B%5D=tracker&c%5B%5D=status&c%5B%5D=subject&f%5B%5D=status_id&f%5B%5D=assigned_to_id&f%5B%5D=project.status&op%5Bassigned_to_id%5D=%3D&op%5Bproject.status%5D=%3D&op%5Bstatus_id%5D=o&set_filter=1&sort=priority%3Adesc%2Cupdated_on%3Adesc&v%5Bassigned_to_id%5D%5B%5D=me&v%5Bproject.status%5D%5B%5D=1&v%5Bstatus_id%5D%5B%5D=
+              - text: (0)
+            - paragraph [ref=e61]: Ningún dato disponible
+          - generic [ref=e63]:
+            - generic [ref=e64]:
+              - generic "Mover" [ref=e65]: 
+              - link " Borrar" [ref=e66] [cursor=pointer]:
+                - /url: /my/remove_block?block=issuesreportedbyme
+            - link " Opciones" [ref=e68] [cursor=pointer]:
+              - /url: "#"
+            - heading "Peticiones registradas por mí (0)" [level=3] [ref=e69]:
+              - link "Peticiones registradas por mí" [ref=e70] [cursor=pointer]:
+                - /url: /issues?c%5B%5D=project&c%5B%5D=tracker&c%5B%5D=status&c%5B%5D=subject&f%5B%5D=status_id&f%5B%5D=author_id&f%5B%5D=project.status&op%5Bauthor_id%5D=%3D&op%5Bproject.status%5D=%3D&op%5Bstatus_id%5D=o&set_filter=1&sort=updated_on%3Adesc&v%5Bauthor_id%5D%5B%5D=me&v%5Bproject.status%5D%5B%5D=1&v%5Bstatus_id%5D%5B%5D=
+              - text: (0)
+            - paragraph [ref=e71]: Ningún dato disponible
+      - generic [ref=e72]:
+        - text: Powered by
+        - link "Bitnami Redmine Stack" [ref=e73] [cursor=pointer]:
+          - /url: https://bitnami.com/stack/redmine
+        - text: © 2006-2020 Jean-Philippe Lang
+  - log [ref=e74]
+  - log [ref=e75]
+  - log [ref=e76]
+  - log [ref=e77]
+  - log [ref=e78]
+  - log [ref=e79]
+  - log [ref=e80]
+  - log [ref=e81]
+  - log [ref=e82]
+  - log [ref=e83]
+  - log [ref=e84]
+  - log [ref=e85]
+  - log [ref=e86]
+  - log [ref=e87]
