@@ -218,6 +218,9 @@ function saveOutputInner(
 
 export const defaultLayer = layer.pipe(
   Layer.provide(CronJobs.defaultLayer),
+  Layer.provide(Provider.defaultLayer),
+  Layer.provide(Global.layer),
+  Layer.provide(FSUtil.defaultLayer),
 )
 
 export * as CronExecutor from "./executor"

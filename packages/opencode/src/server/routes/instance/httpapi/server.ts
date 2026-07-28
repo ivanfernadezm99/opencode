@@ -8,8 +8,6 @@ import { Account } from "@/account/account"
 import { Agent } from "@/agent/agent"
 import { Auth } from "@/auth"
 import { BackgroundJob } from "@/background/job"
-import { CronJobs } from "@/cron/jobs"
-import { CronScheduler } from "@/cron/scheduler"
 import { Command } from "@/command"
 import { Config } from "@/config/config"
 import { Workspace } from "@/control-plane/workspace"
@@ -222,8 +220,6 @@ const app = LayerNode.group([
   ModelsDev.node,
   Provider.node,
   ProviderAuth.node,
-  LayerNode.make(CronJobs.defaultLayer),
-  LayerNode.make(CronScheduler.defaultLayer),
   Agent.node,
   Skill.node,
   Discovery.node,
