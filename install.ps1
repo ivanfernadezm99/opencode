@@ -38,12 +38,19 @@ $GENTLE_NAME = "gentle-ai"
 
 $NEXTCLOUD_MIRROR = "https://enlaceschacocloud.duckdns.org/public.php/webdav"
 $NEXTCLOUD_TOKEN = "ojAcbHDQBTX97oD"
-$FALLBACK_VERSION = "v1.0.11"
+$FALLBACK_VERSION = "v1.17.15"
 
 $OPENCODE_DIR = Join-Path $env:LOCALAPPDATA "opencode\bin"
 $GENTLE_DIR = Join-Path $env:LOCALAPPDATA "gentle-ai\bin"
 
-# --- Colors / Logging ------------------------------------------------------
+# --- Logging ----------------------------------------------------------------
+
+$INSTALL_LOG_DIR = Join-Path $env:LOCALAPPDATA "opencode\logs"
+$null = New-Item -ItemType Directory -Path $INSTALL_LOG_DIR -Force
+$INSTALL_LOG_FILE = Join-Path $INSTALL_LOG_DIR "install-$(Get-Date -Format 'yyyyMMdd-HHmmss').log"
+Start-Transcript -Path $INSTALL_LOG_FILE -Append | Out-Null
+
+# --- Colors / Console ------------------------------------------------------
 
 function Write-Info    { param([string]$Message) Write-Host "  $Message" -ForegroundColor Blue }
 function Write-Success { param([string]$Message) Write-Host "  $Message" -ForegroundColor Green }
@@ -54,6 +61,8 @@ function Write-Step    { param([string]$Message) Write-Host "`n==> $Message" -Fo
 function Stop-WithError {
     param([string]$Message)
     Write-Err $Message
+    Write-Info "Log saved to: $INSTALL_LOG_FILE"
+    Stop-Transcript | Out-Null
     exit 1
 }
 
@@ -494,6 +503,8 @@ function Main {
             Write-Host "  2. Open a NEW PowerShell as Administrator" -ForegroundColor Cyan
             Write-Host "  3. Re-run: irm https://github.com/ivanfernadezm99/opencode/releases/latest/download/install.ps1 | iex" -ForegroundColor DarkGray
             Write-Host ""
+            Write-Info "Log saved to: $INSTALL_LOG_FILE"
+            Stop-Transcript | Out-Null
             exit 0
         } else {
             Write-Err "winget not found. Please install manually:"
@@ -503,6 +514,8 @@ function Main {
             Write-Host ""
             Write-Host "  After installing, OPEN A NEW TERMINAL and re-run the installer." -ForegroundColor Yellow
             Write-Host ""
+            Write-Info "Log saved to: $INSTALL_LOG_FILE"
+            Stop-Transcript | Out-Null
             exit 1
         }
     }
@@ -952,6 +965,8 @@ function Main {
     Write-Host ""
     Write-Host "Installation complete!" -ForegroundColor Green
     Write-Host ""
+    Write-Info "Install log saved to: $INSTALL_LOG_FILE"
+    Write-Host ""
     Write-Host "Next step:" -ForegroundColor White
     Write-Host "  Set your API key:" -ForegroundColor Cyan
     Write-Host '    $env:OPENCODE_API_KEY = "your-api-key"' -ForegroundColor DarkGray
@@ -963,6 +978,7 @@ function Main {
     Write-Host "    gentle-orchestrator  (SDD workflow)" -ForegroundColor DarkGray
     Write-Host "    Default              (standard chat)" -ForegroundColor DarkGray
     Write-Host ""
+    Stop-Transcript | Out-Null
 }
 
 $mainParams = @{}
