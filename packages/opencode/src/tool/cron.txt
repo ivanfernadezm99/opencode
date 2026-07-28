@@ -1,0 +1,3 @@
+List and check cron jobs scheduled in the background. Use to answer questions like "what crons are active?" or "show me my scheduled tasks".
+
+The output includes job name, schedule expression, next run time, and current state.
