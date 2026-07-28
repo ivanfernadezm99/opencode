@@ -19,10 +19,11 @@ export function normalizeAgentList(input: unknown): Agent[] {
 }
 
 export function normalizeProviderList(input: ProviderListResponse): NormalizedProviderListResponse {
+  const all = input?.all ?? []
   return {
     ...input,
     all: new Map(
-      input.all.map(
+      all.map(
         (provider) =>
           [
             provider.id,

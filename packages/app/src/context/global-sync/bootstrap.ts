@@ -180,7 +180,7 @@ function warmSessions(input: {
 export const loadProvidersQuery = (scope: ServerScope, directory: string | null, sdk: OpencodeClient) =>
   queryOptions({
     queryKey: [scope, directory, "providers"],
-    queryFn: () => retry(() => sdk.provider.list().then((x) => normalizeProviderList(x.data!))),
+    queryFn: () => retry(() => sdk.provider.list().then((x) => normalizeProviderList(x.data ?? { all: [], default: {}, connected: [] } as any))),
   })
 
 export const loadAgentsQuery = (scope: ServerScope, directory: string | null, sdk: OpencodeClient) =>
