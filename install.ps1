@@ -1055,6 +1055,20 @@ function Main {
 
     if ($Desktop) {
         Write-Step "Installing desktop app"
+
+        # Kill any existing desktop app processes to avoid "file in use" errors
+        Write-Info "Stopping existing desktop app..."
+        taskkill /f /fi "IMAGENAME eq @opencode-aidesktop.exe" 2>$null | Out-Null
+        taskkill /f /fi "IMAGENAME eq opencode.exe" 2>$null | Out-Null
+        Start-Sleep -Seconds 2
+
+        # Clean stale lockfile that prevents app from starting
+        $lockfile = Join-Path $env:APPDATA "ai.opencode.desktop.dev\lockfile"
+        if (Test-Path $lockfile) {
+            Remove-Item -Path $lockfile -Force -ErrorAction SilentlyContinue
+            Write-Info "Cleaned stale lockfile"
+        }
+
         $desktopExeName = "opencode-desktop-win-x64.exe"
         $desktopUrl = "https://github.com/$OPENCODE_REPO/releases/download/$Version/$desktopExeName"
         $desktopPath = Join-Path $env:TEMP $desktopExeName
