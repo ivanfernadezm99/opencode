@@ -132,6 +132,47 @@ function Get-LatestVersion {
     return $null
 }
 
+function Get-WindowsVersion {
+    param([string]$Repo, [string]$BinaryName, [string]$LatestVersion)
+    <#
+    .SYNOPSIS
+        Returns the latest version tag that has a Windows binary asset.
+        Starts from $LatestVersion and walks backward if needed.
+    #>
+    $arch = Get-Arch
+    $zipName = "${BinaryName}_$($LatestVersion -replace '^v','')_windows_${arch}.zip"
+
+    # Quick check: does the latest release have a Windows asset?
+    $assetUrl = "https://github.com/$Repo/releases/download/$LatestVersion/$zipName"
+    try {
+        $check = Invoke-WebRequest -Uri $assetUrl -Method Head -UseBasicParsing -TimeoutSec 10
+        if ($check.StatusCode -eq 200 -or $check.StatusCode -eq 302) {
+            Write-Info "Windows build confirmed for $LatestVersion"
+            return $LatestVersion
+        }
+    } catch {}
+
+    # If HEAD check failed, query the release API for assets
+    Write-Warn "$LatestVersion has no Windows build. Searching older releases..."
+    try {
+        $releases = Invoke-RestMethod -Uri "https://api.github.com/repos/$Repo/releases?per_page=10" `
+            -Headers @{ "User-Agent" = "gentle-opencode-installer" }
+        foreach ($rel in $releases) {
+            $tag = $rel.tag_name
+            foreach ($asset in $rel.assets) {
+                if ($asset.name -match "${BinaryName}_.*_windows_${arch}\.(zip|tar\.gz)") {
+                    Write-Success "Found Windows build in $tag"
+                    return $tag
+                }
+            }
+        }
+    } catch {
+        Write-Warn "Could not query releases API."
+    }
+
+    return $null
+}
+
 function Get-LatestFromNextcloud {
     Write-Info "Checking Nextcloud for latest version..."
 
@@ -541,37 +582,22 @@ function Main {
     }
 
     Write-Step "Installing gentle-ai"
-    $gentleVersion = Get-LatestVersion -Repo $GENTLE_REPO
-    if (-not $gentleVersion) {
-        Write-Warn "Cannot reach GitHub for gentle-ai. Trying with known version..."
-        $gentleVersion = "v2.1.5"
+    $gentleLatest = Get-LatestVersion -Repo $GENTLE_REPO
+    if (-not $gentleLatest) {
+        Write-Warn "Cannot reach GitHub for gentle-ai. Using known version..."
+        $gentleVersion = "v2.1.10"
+    } else {
+        $gentleVersion = Get-WindowsVersion -Repo $GENTLE_REPO -BinaryName "gentle-ai" -LatestVersion $gentleLatest
+        if (-not $gentleVersion) {
+            Write-Warn "No Windows build found for gentle-ai. Using last known version..."
+            $gentleVersion = "v2.1.10"
+        }
     }
     $gentleInstalled = $gentleVersion -and (Get-InstalledVersion -BinaryPath (Join-Path $GENTLE_DIR "gentle-ai.exe")) -eq $gentleVersion
     if ($gentleInstalled) {
         Write-Success "gentle-ai already at latest version ($gentleVersion), skipping."
     } else {
-        # Try latest version first; if Windows build is missing, fall back to last known Windows version
-        $gentleFallbacks = @($gentleVersion, "v2.1.10", "v2.1.5")
-        $gentleOk = $false
-        foreach ($tryVersion in $gentleFallbacks) {
-            if ($tryVersion -ne $gentleVersion) {
-                Write-Warn "v$gentleVersion has no Windows build. Trying $tryVersion..."
-            }
-            try {
-                $prevEA = $ErrorActionPreference
-                $ErrorActionPreference = "Continue"
-                Install-Binary -Repo $GENTLE_REPO -OutputDir $GENTLE_DIR -AssetName "gentle-ai" -BinaryName "gentle-ai" -Version $tryVersion
-                $gentleOk = $true
-                $ErrorActionPreference = $prevEA
-                break
-            } catch {
-                $ErrorActionPreference = $prevEA
-                Write-Warn "gentle-ai $tryVersion failed: $_"
-            }
-        }
-        if (-not $gentleOk) {
-            Write-Warn "Could not install gentle-ai. Skipping (opencli still works without it)."
-        }
+        Install-Binary -Repo $GENTLE_REPO -OutputDir $GENTLE_DIR -AssetName "gentle-ai" -BinaryName "gentle-ai" -Version $gentleVersion
     }
 
     Write-Step "Setting up PATH"
