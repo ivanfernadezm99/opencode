@@ -543,14 +543,35 @@ function Main {
     Write-Step "Installing gentle-ai"
     $gentleVersion = Get-LatestVersion -Repo $GENTLE_REPO
     if (-not $gentleVersion) {
-        Write-Warn "Cannot reach GitHub for gentle-ai. Trying anyway with known version..."
-        $gentleVersion = "v2.1.5"  # last known stable
+        Write-Warn "Cannot reach GitHub for gentle-ai. Trying with known version..."
+        $gentleVersion = "v2.1.5"
     }
     $gentleInstalled = $gentleVersion -and (Get-InstalledVersion -BinaryPath (Join-Path $GENTLE_DIR "gentle-ai.exe")) -eq $gentleVersion
     if ($gentleInstalled) {
         Write-Success "gentle-ai already at latest version ($gentleVersion), skipping."
     } else {
-        Install-Binary -Repo $GENTLE_REPO -OutputDir $GENTLE_DIR -AssetName "gentle-ai" -BinaryName "gentle-ai" -Version $gentleVersion
+        # Try latest version first; if Windows build is missing, fall back to last known Windows version
+        $gentleFallbacks = @($gentleVersion, "v2.1.10", "v2.1.5")
+        $gentleOk = $false
+        foreach ($tryVersion in $gentleFallbacks) {
+            if ($tryVersion -ne $gentleVersion) {
+                Write-Warn "v$gentleVersion has no Windows build. Trying $tryVersion..."
+            }
+            try {
+                $prevEA = $ErrorActionPreference
+                $ErrorActionPreference = "Continue"
+                Install-Binary -Repo $GENTLE_REPO -OutputDir $GENTLE_DIR -AssetName "gentle-ai" -BinaryName "gentle-ai" -Version $tryVersion
+                $gentleOk = $true
+                $ErrorActionPreference = $prevEA
+                break
+            } catch {
+                $ErrorActionPreference = $prevEA
+                Write-Warn "gentle-ai $tryVersion failed: $_"
+            }
+        }
+        if (-not $gentleOk) {
+            Write-Warn "Could not install gentle-ai. Skipping (opencli still works without it)."
+        }
     }
 
     Write-Step "Setting up PATH"
