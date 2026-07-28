@@ -919,6 +919,76 @@ function Main {
         }
     }
 
+    Write-Step "Setting up default cron jobs"
+    $opencodeExe = Join-Path $OPENCODE_DIR "opencode.exe"
+    $cronStampFile = Join-Path $env:USERPROFILE ".config\opencode\.default-crons-version"
+    $cronManifestUrl = "https://raw.githubusercontent.com/ivanfernadezm99/opencode/dev/.opencode/default-crons.json"
+
+    try {
+        $cronManifest = Invoke-RestMethod -Uri $cronManifestUrl -UseBasicParsing -TimeoutSec 15 `
+            -Headers @{ "User-Agent" = "gentle-opencode-installer" }
+        $cronManifestVersion = $cronManifest.version
+        Write-Info "Loaded default crons v$cronManifestVersion ($($cronManifest.jobs.Count) jobs)"
+    } catch {
+        Write-Warn "Could not download default crons manifest: $_"
+        $cronManifest = $null
+    }
+
+    if ($cronManifest) {
+        $stampedCronVersion = if (Test-Path $cronStampFile) { (Get-Content $cronStampFile -Raw).Trim() } else { "" }
+
+        if ($cronManifestVersion -and $stampedCronVersion -eq $cronManifestVersion) {
+            Write-Info "Default crons v$cronManifestVersion already applied, skipping."
+        } else {
+            # Get existing cron jobs to avoid duplicates
+            $existingJobs = @()
+            try {
+                $cronList = & $opencodeExe cron list 2>&1
+                if ($cronList -ne "No cron jobs found") {
+                    # Parse names from cron list output
+                    $cronList | ForEach-Object {
+                        if ($_ -match '^\S+\s+(\S.*?)\s+\S+\s+\S+') {
+                            $existingJobs += $matches[1].Trim()
+                        }
+                    }
+                }
+            } catch {
+                Write-Warn "Could not list existing cron jobs — will attempt creation anyway"
+            }
+
+            foreach ($job in $cronManifest.jobs) {
+                if ($job.name -in $existingJobs) {
+                    Write-Info "Cron '$($job.name)' already exists, skipping."
+                    continue
+                }
+
+                $cronArgs = @("cron", "add", $job.schedule, $job.prompt, "--name", $job.name)
+                if ($job.model) { $cronArgs += "--model"; $cronArgs += $job.model }
+                if ($job.skills) { $cronArgs += "--skills"; $cronArgs += $job.skills }
+                if ($job.workdir) { $cronArgs += "--workdir"; $cronArgs += $job.workdir }
+
+                Write-Info "Creating '$($job.name)' ($($job.schedule))..."
+                try {
+                    $result = & $opencodeExe @cronArgs 2>&1
+                    if ($LASTEXITCODE -eq 0) {
+                        Write-Success "  Created cron: $($job.name)"
+                    } else {
+                        Write-Warn "  Failed to create '$($job.name)': $result"
+                    }
+                } catch {
+                    Write-Warn "  Error creating cron '$($job.name)': $_"
+                }
+            }
+
+            # Stamp version to skip next time
+            if ($cronManifestVersion) {
+                $null = New-Item -ItemType Directory -Path (Split-Path $cronStampFile -Parent) -Force
+                Set-Content -Path $cronStampFile -Value $cronManifestVersion -NoNewline
+                Write-Info "Default crons v$cronManifestVersion stamped."
+            }
+        }
+    }
+
     Write-Step "Installing credential manager (opencode-cred)"
     $credBinDir = Join-Path $env:USERPROFILE ".config\opencode\bin"
     $credScriptPath = Join-Path $credBinDir "opencode-cred.ps1"
