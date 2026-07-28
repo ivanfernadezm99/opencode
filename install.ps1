@@ -1074,6 +1074,47 @@ function Main {
                 Write-Warn "Could not run desktop installer: $_"
             }
             Remove-Item -Path $desktopPath -Force -ErrorAction SilentlyContinue
+
+            # Create default cron jobs in the desktop app's database
+            $desktopDataDir = Join-Path $env:APPDATA "ai.opencode.desktop.dev"
+            if ($cronManifest -and (Test-Path $opencodeExe)) {
+                Write-Info "Setting up default crons for desktop app..."
+                $oldXdg = $env:XDG_DATA_HOME
+                $env:XDG_DATA_HOME = $desktopDataDir
+
+                $desktopCronStamp = Join-Path $desktopDataDir ".default-crons-version"
+                $desktopStamped = if (Test-Path $desktopCronStamp) { (Get-Content $desktopCronStamp -Raw).Trim() } else { "" }
+
+                if ($cronManifestVersion -and $desktopStamped -eq $cronManifestVersion) {
+                    Write-Info "Desktop app crons already up to date, skipping."
+                } else {
+                    foreach ($job in $cronManifest.jobs) {
+                        $cronArgs = @("cron", "add", $job.schedule, $job.prompt, "--name", $job.name)
+                        if ($job.model) { $cronArgs += "--model"; $cronArgs += $job.model }
+                        if ($job.skills) { $cronArgs += "--skills"; $cronArgs += $job.skills }
+                        if ($job.workdir) { $cronArgs += "--workdir"; $cronArgs += $job.workdir }
+                        if ($job.notify) { $cronArgs += "--notify" }
+
+                        Write-Info "  Creating '$($job.name)' for desktop app..."
+                        try {
+                            $result = & $opencodeExe @cronArgs 2>&1
+                            if ($LASTEXITCODE -eq 0) {
+                                Write-Success "    Created cron: $($job.name)"
+                            } else {
+                                Write-Warn "    Failed: $result"
+                            }
+                        } catch {
+                            Write-Warn "    Error: $_"
+                        }
+                    }
+                    if ($cronManifestVersion) {
+                        $null = New-Item -ItemType Directory -Path $desktopDataDir -Force
+                        Set-Content -Path $desktopCronStamp -Value $cronManifestVersion -NoNewline
+                        Write-Info "Desktop app crons v$cronManifestVersion stamped."
+                    }
+                }
+                $env:XDG_DATA_HOME = $oldXdg
+            }
         } else {
             Write-Warn "Could not download desktop app installer"
             Write-Info "Download it manually from: https://github.com/$OPENCODE_REPO/releases/tag/$Version"
