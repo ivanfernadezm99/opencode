@@ -95,7 +95,7 @@ const listenEffect: (opts: ListenOptions) => Effect.Effect<EffectListener, unkno
       yield* scheduler.start()
     }).pipe(
       Effect.provide(CronScheduler.defaultLayer),
-      Effect.catchAll((e) => Effect.logError("Cron scheduler failed", e)),
+      Effect.catch((e) => Effect.logError("Cron scheduler failed", e)),
       Effect.forkIn(state.scope),
     )
 
