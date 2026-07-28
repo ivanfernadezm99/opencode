@@ -1,7 +1,7 @@
 import "./init-projectors"
 
 import { NodeHttpServer } from "@effect/platform-node"
-import { ConfigProvider, Context, Effect, Exit, Layer, Scope } from "effect"
+import { ConfigProvider, Context, Effect, Exit, Layer, Schedule, Scope } from "effect"
 import { HttpRouter, HttpServer } from "effect/unstable/http"
 import { OpenApi } from "effect/unstable/httpapi"
 import { createServer } from "node:http"
@@ -12,7 +12,8 @@ import { WebSocketTracker } from "./routes/instance/httpapi/websocket-tracker"
 import { PublicApi } from "./routes/instance/httpapi/public"
 import type { CorsOptions } from "@opencode-ai/server/cors"
 import { lazy } from "@/util/lazy"
-import { CronScheduler } from "../cron/scheduler"
+import { CronJobs } from "../cron/jobs"
+import { CronExecutor } from "../cron/executor"
 import { CronDefaults } from "../cron/defaults"
 
 // @ts-ignore This global is needed to prevent ai-sdk from logging warnings to stdout https://github.com/vercel/ai/blob/2dc67e0ef538307f21368db32d5a12345d98831b/packages/ai/src/logger/log-warnings.ts#L85
@@ -89,13 +90,38 @@ const listenEffect: (opts: ListenOptions) => Effect.Effect<EffectListener, unkno
     const unpublishMdns = yield* setupMdns(opts, address.port, state.scope)
     url = listenerUrl
 
-    // Seed default cron jobs + start scheduler in background fibers
+    // Seed default cron jobs + start scheduler tick loop in background
     yield* Effect.gen(function* () {
-      yield* CronDefaults.seedDefaultCrons("1.0")
-      const scheduler = yield* CronScheduler.Service
-      yield* scheduler.start()
+      const cronJobs = yield* CronJobs.Service
+      const executor = yield* CronExecutor.Service
+
+      // Seed defaults first (idempotent)
+      yield* CronDefaults.seedDefaultCrons("1.0").pipe(
+        Effect.provideService(CronJobs.Service, cronJobs),
+        Effect.catch((e) => Effect.logError("Default crons seed failed", e)),
+      )
+
+      // Simple tick loop: every 60s, fetch due jobs and execute them
+      yield* Effect.logInfo("Cron ticker started")
+      yield* Effect.gen(function* () {
+        while (true) {
+          const due = yield* cronJobs.getDueJobs().pipe(
+            Effect.catch(() => Effect.succeed([] as never)),
+          )
+          for (const job of due) {
+            yield* executor.execute(job).pipe(
+              Effect.catch((e) => Effect.logError("Cron job failed", e)),
+              Effect.forkIn(state.scope),
+            )
+          }
+          yield* Effect.sleep(60_000)
+        }
+      }).pipe(
+        Effect.catch((e) => Effect.logError("Cron ticker crashed", e)),
+        Effect.forkIn(state.scope),
+      )
     }).pipe(
-      Effect.provide(CronScheduler.defaultLayer),
+      Effect.provide(CronExecutor.defaultLayer),
       Effect.catch((e) => Effect.logError("Cron initialization failed", e)),
       Effect.forkIn(state.scope),
     )
