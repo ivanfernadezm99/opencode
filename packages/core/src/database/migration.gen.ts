@@ -43,5 +43,6 @@ export const migrations = (
     import("./migration/20260702195223_jittery_micromacro"),
     import("./migration/20260723120000_add_last_allowance_month"),
     import("./migration/20260727145922_cron_job"),
+    import("./migration/20260728161158_add-notify-to-cron"),
   ])
 ).map((module) => module.default) satisfies DatabaseMigration.Migration[]

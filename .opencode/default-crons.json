@@ -8,7 +8,8 @@
       "prompt": "Revisá las horas cargadas esta semana en Redmine usando el skill redmine-time-entries. Mostrame un resumen de qué días ya están completos y cuáles faltan cargar. Preguntame si quiero cargar las horas faltantes ahora. Si ya está todo completo para la semana, solo confirmalo.",
       "skills": "redmine-time-entries",
       "model": "",
-      "workdir": ""
+      "workdir": "",
+      "notify": true
     }
   ]
 }

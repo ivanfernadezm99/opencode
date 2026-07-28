@@ -35,6 +35,7 @@ export default {
           \`workdir\` text,
           \`repeat_times\` integer,
           \`repeat_done\` integer DEFAULT 0 NOT NULL,
+          \`notify\` integer DEFAULT 0 NOT NULL,
           \`time_created\` integer NOT NULL,
           \`time_updated\` integer NOT NULL
         );

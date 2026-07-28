@@ -23,6 +23,7 @@ export class CronJob extends Schema.Class<CronJob>("CronJob")({
   workdir: Schema.NullOr(Schema.String),
   repeat_times: Schema.NullOr(Schema.Number),
   repeat_done: Schema.Number,
+  notify: Schema.Number,
   time_created: Schema.Number,
   time_updated: Schema.Number,
 }) {}
@@ -38,6 +39,7 @@ export class CreateInput extends Schema.Class<CreateInput>("CronJob.CreateInput"
   repeat_times: Schema.optional(Schema.Number),
   next_run_at: Schema.optional(Schema.Number),
   enabled: Schema.optional(Schema.Number),
+  notify: Schema.optional(Schema.Number),
 }) {}
 
 export class CronJobServiceError extends Schema.TaggedErrorClass<CronJobServiceError>()(
@@ -172,6 +174,7 @@ function rowToJob(row: typeof CronJobTable.$inferSelect): CronJob {
     workdir: row.workdir ?? null,
     repeat_times: row.repeat_times ?? null,
     repeat_done: row.repeat_done,
+    notify: row.notify,
     time_created: row.time_created,
     time_updated: row.time_updated,
   })
@@ -208,6 +211,7 @@ export const layer = Layer.effect(
             workdir: input.workdir ?? undefined,
             repeat_times: input.repeat_times ?? undefined,
             next_run_at: input.next_run_at ?? undefined,
+            notify: input.notify ?? 0,
             time_created: time,
             time_updated: time,
           }

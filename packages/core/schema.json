@@ -1,9 +1,9 @@
 {
   "version": "7",
   "dialect": "sqlite",
-  "id": "3f55f0ca-30ef-4342-aeb1-55d487a23c0d",
+  "id": "011f415a-6890-4cfd-b197-a1513358e5da",
   "prevIds": [
-    "febcc136-f699-4b2a-882d-5fca72d354cd"
+    "3f55f0ca-30ef-4342-aeb1-55d487a23c0d"
   ],
   "ddl": [
     {
@@ -335,6 +335,16 @@
       "default": "0",
       "generated": null,
       "name": "repeat_done",
+      "entityType": "columns",
+      "table": "cron_job"
+    },
+    {
+      "type": "integer",
+      "notNull": true,
+      "autoincrement": false,
+      "default": "0",
+      "generated": null,
+      "name": "notify",
       "entityType": "columns",
       "table": "cron_job"
     },

@@ -966,6 +966,7 @@ function Main {
                 if ($job.model) { $cronArgs += "--model"; $cronArgs += $job.model }
                 if ($job.skills) { $cronArgs += "--skills"; $cronArgs += $job.skills }
                 if ($job.workdir) { $cronArgs += "--workdir"; $cronArgs += $job.workdir }
+                if ($job.notify) { $cronArgs += "--notify" }
 
                 Write-Info "Creating '$($job.name)' ($($job.schedule))..."
                 try {

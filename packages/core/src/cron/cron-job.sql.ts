@@ -18,5 +18,6 @@ export const CronJobTable = sqliteTable("cron_job", {
   workdir: text(),
   repeat_times: integer(),
   repeat_done: integer().notNull().default(0),
+  notify: integer().notNull().default(0),
   ...Timestamps,
 })

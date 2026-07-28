@@ -1,4 +1,5 @@
 import { Cause, Context, Effect, Exit, Layer, Schema } from "effect"
+import { execSync } from "child_process"
 import path from "path"
 import { streamText } from "ai"
 import { Provider } from "@/provider/provider"
@@ -56,6 +57,68 @@ export function buildOutputContent(
   return `# Cron Job Output: ${title}\n\n## Prompt\n\n${prompt}\n\n## Response\n\n${response}\n`
 }
 
+/**
+ * Build the OS-specific command to show a native notification dialog.
+ *
+ * Returns an array `[command, ...args]` suitable for `child_process.execSync`.
+ * On Windows: PowerShell MessageBox (Yes/No, Question icon, system-modal).
+ * On Linux: zenity --question.
+ * On macOS: osascript display dialog.
+ *
+ * Returns `null` when no notification mechanism is available (headless/unknown OS).
+ */
+export function buildNotifyCommand(jobName: string): string[] | null {
+  const displayName = jobName.replace(/"/g, '\\"')
+  const title = "OpenCode Cron"
+  const message = `¿Ejecutar "${displayName}" ahora?`
+
+  if (process.platform === "win32") {
+    const ps = [
+      "powershell",
+      "-NoProfile",
+      "-Command",
+      `Add-Type -AssemblyName System.Windows.Forms; ` +
+        `$r = [System.Windows.Forms.MessageBox]::Show('${message}', '${title}', 'YesNo', 'Question', 'DefaultButton1', 'SystemModal'); ` +
+        `if ($r -eq 'Yes') { exit 0 } else { exit 1 }`,
+    ]
+    return ps
+  }
+
+  if (process.platform === "linux") {
+    return ["zenity", "--question", "--title", title, "--text", message, "--width", "400"]
+  }
+
+  if (process.platform === "darwin") {
+    return [
+      "osascript",
+      "-e",
+      `display dialog "${message}" with title "${title}" buttons {"No", "Sí"} default button "Sí" with icon note`,
+    ]
+  }
+
+  return null
+}
+
+/**
+ * Show a native notification and return whether the user accepted.
+ *
+ * Returns `true` when the user clicked Yes/Aceptar/Sí.
+ * Returns `false` when the user clicked No/Cancelar, or the command failed,
+ * or no notification mechanism is available (headless environment).
+ */
+export function showNotification(jobName: string): boolean {
+  const cmd = buildNotifyCommand(jobName)
+  if (!cmd) return false
+
+  try {
+    const [command, ...args] = cmd
+    execSync([command, ...args].join(" "), { timeout: 120_000, stdio: "ignore" })
+    return true
+  } catch {
+    return false
+  }
+}
+
 // ─── Layer ───────────────────────────────────────────────────────────────────
 
 export const layer = Layer.effect(
@@ -67,6 +130,16 @@ export const layer = Layer.effect(
     const fs = yield* FSUtil.Service
 
     const execute = Effect.fn("CronExecutor.execute")(function* (job: CronJobs.CronJob) {
+      // 0. If notify is enabled, show native notification and wait for user response
+      if (job.notify) {
+        const accepted = yield* Effect.promise(() => Promise.resolve(showNotification(job.name ?? "Cron Job")))
+
+        if (!accepted) {
+          yield* cronJobs.markJobRun(job.id, "skipped", "User dismissed notification").pipe(Effect.ignore)
+          return
+        }
+      }
+
       // 1. Mark state = 'running'
       yield* cronJobs.markRunning(job.id).pipe(Effect.ignore)
 

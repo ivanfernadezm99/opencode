@@ -135,6 +135,11 @@ const AddCommand = effectCmd({
         describe: "Schedule kind (auto-detected from expression if omitted)",
         type: "string",
         choices: ["cron", "interval", "once"] as const,
+      })
+      .option("notify", {
+        describe: "Show a native OS notification before executing the job",
+        type: "boolean",
+        default: false,
       }),
   handler: (args) =>
     Effect.gen(function* () {
@@ -149,6 +154,7 @@ const AddCommand = effectCmd({
         skills: args.skills,
         workdir: args.workdir,
         repeat_times: args.repeat !== undefined ? Number(args.repeat) : undefined,
+        notify: args.notify === true ? 1 : undefined,
       })
       console.log(job.id)
     }).pipe(

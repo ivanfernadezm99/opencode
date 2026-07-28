@@ -535,7 +535,7 @@
     },
     "packages/opencode": {
       "name": "opencode",
-      "version": "1.17.11",
+      "version": "1.17.15",
       "bin": {
         "opencode": "./bin/opencode",
       },
