@@ -78,7 +78,7 @@ export function buildNotifyCommand(jobName: string): string[] | null {
       "-NoProfile",
       "-Command",
       `Add-Type -AssemblyName System.Windows.Forms; ` +
-        `$r = [System.Windows.Forms.MessageBox]::Show('${message}', '${title}', 'YesNo', 'Question', 'DefaultButton1', 'SystemModal'); ` +
+        `$r = [System.Windows.Forms.MessageBox]::Show('${message}', '${title}', 'YesNo', 'Question', 'Button1', 'SystemModal'); ` +
         `if ($r -eq 'Yes') { exit 0 } else { exit 1 }`,
     ]
     return ps
