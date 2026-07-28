@@ -37,8 +37,14 @@ export function seedDefaultCrons(version: string) {
     // Check stamp file
     const stamped = yield* fs.readFileStringSafe(stampFile).pipe(
       Effect.map((content) => content?.trim() ?? ""),
+      Effect.catch((e) => {
+        Effect.logWarning("Failed to read cron stamp file", e)
+        return Effect.succeed("")
+      }),
     )
     if (stamped === version) return
+
+    yield* Effect.logInfo("Seeding default cron jobs...")
 
     // Get existing jobs to avoid duplicates
     const existing = yield* cronJobs.list().pipe(
@@ -67,7 +73,8 @@ export function seedDefaultCrons(version: string) {
 
     // Write stamp
     yield* fs.writeWithDirs(stampFile, version).pipe(
-      Effect.catch(() => Effect.void),
+      Effect.tap(() => Effect.logInfo("Default crons seeded successfully")),
+      Effect.catch((e) => Effect.logWarning("Failed to write cron stamp", e)),
     )
   })
 }
