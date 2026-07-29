@@ -1,3 +1,8 @@
-List and check cron jobs scheduled in the background. Use to answer questions like "what crons are active?" or "show me my scheduled tasks".
+Query opencode's built-in cron job scheduler. Use this tool when the user asks about:
+- Scheduled tasks, cron jobs, reminders, timers, or background jobs
+- "What crons do I have?", "Show me scheduled tasks", "Any reminders set?"
+- Anything related to time-based automation within opencode
+- Phrases like "tareas programadas", "recordatorios", "crons", "horarios"
 
-The output includes job name, schedule expression, next run time, and current state.
+This tool lists all cron jobs with their schedule, next run time, and state.
+Output format: table with NAME, SCHEDULE, NEXT RUN, and STATE columns.
