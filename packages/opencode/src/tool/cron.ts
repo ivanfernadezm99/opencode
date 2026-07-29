@@ -4,63 +4,78 @@ import DESCRIPTION from "./cron.txt"
 import { execSync } from "child_process"
 
 export const Parameters = Schema.Struct({
-  action: Schema.optional(Schema.Literal("list", "status")).annotate({
-    description: "What to do: list all cron jobs (default)",
+  action: Schema.optional(Schema.Literal("list")).annotate({
+    description: "What to do: list cron jobs (only 'list' supported)",
     default: "list",
   }),
 })
 
-function findOpenCode(): string {
-  const candidates = [
-    process.env.LOCALAPPDATA
-      ? `${process.env.LOCALAPPDATA}/opencode/bin/opencode.exe`
-      : null,
-    process.env.HOME ? `${process.env.HOME}/.local/share/opencode/bin/opencode` : null,
-    "opencode",
-  ].filter(Boolean) as string[]
-
-  for (const c of candidates) {
+function findOpenCode(): string | null {
+  if (process.platform === "win32" && process.env.LOCALAPPDATA) {
+    const exe = `${process.env.LOCALAPPDATA}\\opencode\\bin\\opencode.exe`
     try {
-      execSync(`"${c}" --version`, { stdio: "ignore", timeout: 3000 })
-      return c
-    } catch {}
+      execSync(`"${exe}" --version`, { stdio: "ignore", timeout: 5000 })
+      return exe
+    } catch { /* fall through */ }
   }
-  return "opencode"
+  try {
+    execSync("opencode --version", { stdio: "ignore", timeout: 5000 })
+    return "opencode"
+  } catch { /* fall through */ }
+  return null
+}
+
+function getDesktopDataDir(): string | null {
+  if (process.platform === "win32" && process.env.APPDATA) {
+    return `${process.env.APPDATA}\\ai.opencode.desktop.dev`
+  }
+  return null
 }
 
 export const CronTool = Tool.define(
   "cron",
   Effect.gen(function* () {
-    const binary = findOpenCode()
-
     return {
       description: DESCRIPTION,
       parameters: Parameters,
-      execute: (params: Schema.Schema.Type<typeof Parameters>, _ctx: Tool.Context) =>
+      execute: (_params: Schema.Schema.Type<typeof Parameters>, _ctx: Tool.Context) =>
         Effect.gen(function* () {
-          const action = params.action ?? "list"
+          const binary = findOpenCode()
+          if (!binary) {
+            return {
+              title: "Cron — not available",
+              output: "opencode CLI not found. Install it first or run from terminal: opencode cron list",
+              metadata: {},
+            }
+          }
 
           try {
-            const output = execSync(`"${binary}" cron ${action}`, {
+            const dataDir = getDesktopDataDir()
+            let envVars = ""
+            if (dataDir && process.platform === "win32") {
+              envVars = `set "XDG_DATA_HOME=${dataDir}" && `
+            } else if (dataDir) {
+              envVars = `XDG_DATA_HOME="${dataDir}" `
+            }
+
+            const cmd = `${envVars}"${binary}" cron list`
+            const output = execSync(cmd, {
               encoding: "utf-8",
               timeout: 10000,
               stdio: ["ignore", "pipe", "pipe"],
             })
 
-            const title = action === "status"
-              ? "Cron job status"
-              : "Cron jobs"
-
             return {
-              title,
+              title: "Cron jobs",
               output: output.trim() || "No cron jobs found",
               metadata: {},
             }
           } catch (err: any) {
-            const msg = err?.stderr?.toString() || err?.message || String(err)
+            const stderr = err?.stderr?.toString() || ""
+            const message = err?.message || String(err)
             return {
               title: "Cron query failed",
-              output: msg.trim() || "Failed to query cron jobs",
+              output: (stderr || message).trim() || "Failed to query cron jobs",
               metadata: {},
             }
           }
