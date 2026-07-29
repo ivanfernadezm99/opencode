@@ -1,8 +1,3 @@
-Query opencode's built-in cron job scheduler. Use this tool when the user asks about:
-- Scheduled tasks, cron jobs, reminders, timers, or background jobs
-- "What crons do I have?", "Show me scheduled tasks", "Any reminders set?"
-- Anything related to time-based automation within opencode
-- Phrases like "tareas programadas", "recordatorios", "crons", "horarios"
+IMPORTANT: Use this tool FIRST whenever the user asks about cron jobs, scheduled tasks, reminders, timers, or background jobs within opencode. Do NOT use Windows Task Scheduler commands (schtasks) or shell commands for this — use this dedicated cron tool instead.
 
-This tool lists all cron jobs with their schedule, next run time, and state.
-Output format: table with NAME, SCHEDULE, NEXT RUN, and STATE columns.
+This tool lists opencode's internal cron job scheduler. It shows NAME, SCHEDULE, NEXT RUN, and STATE for each job. Answer "no" to any cron question ONLY after this tool returns empty results.

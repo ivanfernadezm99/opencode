@@ -17,7 +17,6 @@ import { WriteTool } from "./write"
 import { InvalidTool } from "./invalid"
 import { SkillTool } from "./skill"
 import { CronTool } from "./cron"
-import { CronJobs } from "../cron/jobs"
 import * as Tool from "./tool"
 import { Config } from "@/config/config"
 import { type ToolContext as PluginToolContext, type ToolDefinition } from "@opencode-ai/plugin"
@@ -440,7 +439,6 @@ export const node = LayerNode.make(layer.pipe(Layer.provide(Ripgrep.defaultLayer
   Truncate.node,
   RuntimeFlags.node,
   Database.node,
-  LayerNode.make(CronJobs.defaultLayer),
 ])
 
 export * as ToolRegistry from "./registry"
