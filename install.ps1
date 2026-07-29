@@ -1,8 +1,8 @@
 ﻿#Requires -Version 5.1
 <#
 .SYNOPSIS
-    Gentle OpenCode -- Installer for Windows
-    Installs opencode-fork + gentle-ai in one step.
+    one info code -- Installer for Windows
+    Installs one info code + gentle-ai in one step.
 
 .DESCRIPTION
     Downloads the latest opencode-fork and gentle-ai binaries from GitHub,
@@ -70,13 +70,13 @@ function Stop-WithError {
 
 function Show-Banner {
     Write-Host ""
-    Write-Host "   ____            _   _              _    ___ " -ForegroundColor Cyan
-    Write-Host "  / ___| ___ _ __ | |_| | ___        / \  |_ _|" -ForegroundColor Cyan
-    Write-Host " | |  _ / _ \ '_ \| __| |/ _ \_____ / _ \  | | " -ForegroundColor Cyan
-    Write-Host " | |_| |  __/ | | | |_| |  __/_____/ ___ \ | | " -ForegroundColor Cyan
-    Write-Host "  \____|\___|_| |_|\__|_|\___|    /_/   \_\___|" -ForegroundColor Cyan
+    Write-Host "   ___              ___ _        ___                _   " -ForegroundColor Cyan
+    Write-Host "  / _ \ _ __   ___ |_ _|_ __   / __\ __  ___    __| | ___ " -ForegroundColor Cyan
+    Write-Host " | | | | '_ \ / _ \ | || '_ \ / / | '__/ _ \  / _' |/ _ \'" -ForegroundColor Cyan
+    Write-Host " | |_| | | | |  __/ | || | | / /__| | | (_) || (_| |  __/" -ForegroundColor Cyan
+    Write-Host "  \___/|_| |_|\___||___|_| |_\____/|_|  \___/  \__,_|\___|" -ForegroundColor Cyan
     Write-Host ""
-    Write-Host "  Gentle OpenCode Installer - Windows" -ForegroundColor DarkGray
+    Write-Host "  one info code - Windows Installer" -ForegroundColor DarkGray
     Write-Host ""
 }
 
@@ -436,7 +436,7 @@ function Clear-OrphanedShortcuts {
         if (-not (Test-Path $loc.Path)) { continue }
 
         $shortcuts = Get-ChildItem -Path $loc.Path -Filter "*.lnk" -Recurse -ErrorAction SilentlyContinue |
-            Where-Object { $_.Name -like "*OpenCode*" -or $_.Name -like "*oneinfo*" }
+            Where-Object { $_.Name -like "*OpenCode*" -or $_.Name -like "*oneinfo*" -or $_.Name -like "*one info*" }
 
         foreach ($sc in $shortcuts) {
             try {
@@ -1016,14 +1016,14 @@ function Main {
     try {
         $wsh = New-Object -ComObject WScript.Shell
         $desktopPath = [Environment]::GetFolderPath("Desktop")
-        $shortcutPath = Join-Path $desktopPath "OpenCode.lnk"
+        $shortcutPath = Join-Path $desktopPath "one info code.lnk"
         $targetPath = Join-Path $OPENCODE_DIR "opencode.exe"
 
         if (Test-Path $targetPath) {
             $lnk = $wsh.CreateShortcut($shortcutPath)
             $lnk.TargetPath = $targetPath
             $lnk.WorkingDirectory = $OPENCODE_DIR
-            $lnk.Description = "OpenCode - AI-powered terminal"
+            $lnk.Description = "one info code - AI-powered development environment"
             $lnk.Save()
             Write-Success "Shortcut created: $shortcutPath"
         } else {

@@ -115,7 +115,7 @@ function getConfig() {
       return {
         ...base,
         appId,
-        productName: "oneinfo dev",
+        productName: "one info code",
         rpm: { packageName: "opencode-dev" },
       }
     }
@@ -123,7 +123,7 @@ function getConfig() {
       return {
         ...base,
         appId,
-        productName: "oneinfo beta",
+        productName: "one info code beta",
         protocols: { name: "OneInfo Beta", schemes: ["opencode"] },
         publish: { provider: "github", owner: "ivanfernadezm99", repo: "opencode-beta", channel: "latest" },
         rpm: { packageName: "opencode-beta" },
@@ -133,7 +133,7 @@ function getConfig() {
       return {
         ...base,
         appId,
-        productName: "oneinfo",
+        productName: "one info code",
         protocols: { name: "OneInfo", schemes: ["opencode"] },
         publish: { provider: "github", owner: "ivanfernadezm99", repo: "opencode", channel: "latest" },
         deb: { fpm: [legacyDesktopEntryFpm] },

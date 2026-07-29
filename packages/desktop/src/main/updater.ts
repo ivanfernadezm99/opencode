@@ -148,8 +148,8 @@ export async function showUpdaterDialog(controller: ReturnType<typeof setupAutoU
 
   const response = await dialog.showMessageBox({
     type: "info",
-    message: `Gentle OpenCode ${state.version} is available.\n\nUpdate now? The installer will close this app and update automatically.`,
-    title: "Update Available",
+    message: `one info code ${state.version} is available.\n\nUpdate now? The installer will close this app and update automatically.`,
+    title: "one info code - Update Available",
     buttons: ["Update Now", "Later"],
     defaultId: 0,
     cancelId: 1,
@@ -162,8 +162,8 @@ export async function checkForUpdateNotification(controller: ReturnType<typeof s
   if (state.status === "ready" && state.version !== app.getVersion()) {
     const response = await dialog.showMessageBox({
       type: "info",
-      message: `A new version (${state.version}) is available.\n\nUpdate now? The installer will close this app and update automatically.`,
-      title: "Update Available",
+      message: `one info code ${state.version} is available.\n\nUpdate now? The installer will close this app and update automatically.`,
+      title: "one info code - Update Available",
       buttons: ["Update Now", "Later"],
       defaultId: 0,
       cancelId: 1,
