@@ -149,9 +149,70 @@ bun load-hours.js --date 2026-07-17,2026-07-17 \
 
 Análisis, Diseño, Desarrollo, Seguimiento, Testing, Prueba de Concepto, Reunion, Despliegue+Soporte QA, Despliegue+Soporte PROD, Gestión
 
+## Verificación
+
+Al terminar de cargar, `load-hours.js` muestra una **tabla de verificación** con cada entrada creada, scrapeada directamente del listado de Redmine:
+
+```
+╔═══════════════════════════════════════════════════════════════════════════════╗
+║                      VERIFICACIÓN DE HORAS CARGADAS                         ║
+╚═══════════════════════════════════════════════════════════════════════════════╝
+
+  📁 Proyecto: service-delivery-2026
+
+  ┌──────┬────────────┬───────┬─────────────┬──────────────────┬─────────────────────┐
+  │  ID  │ Fecha      │ Horas │ Actividad   │ Issue            │ Comentario          │
+  ├──────┼────────────┼───────┼─────────────┼──────────────────┼─────────────────────┤
+  │ 1234 │ 2026-07-28 │ 8.00  │ Desarrollo  │ #15464           │ Implementé login     │
+  │ 1235 │ 2026-07-29 │ 6.00  │ Testing     │ #15464           │ Testeé módulo        │
+  └──────┴────────────┴───────┴─────────────┴──────────────────┴─────────────────────┘
+
+  📊  2 entradas · 2 día(s) · 14.00 horas
+```
+
+Esto permite verificar visualmente que las horas, actividad, issue y comentarios quedaron bien. Si algo está mal, usá `redmine-entries.js --interactive` para corregir.
+
+## Administrar entradas (borrar + recargar)
+
+Cuando algo salió mal, usá el script `redmine-entries.js` para listar, borrar y recargar desde el listado:
+
+```bash
+# Listar entradas de los últimos 7 días
+node redmine-entries.js --list
+
+# Listar con más días
+node redmine-entries.js --list --days 30
+
+# Borrar una entrada específica
+node redmine-entries.js --delete 12345
+
+# Borrar varias
+node redmine-entries.js --delete 12345,12346,12347
+
+# MODO INTERACTIVO: lista → seleccionar → borrar → recargar
+node redmine-entries.js --interactive
+```
+
+### Flujo interactivo
+
+1. Lista entradas recientes con ID, fecha, horas, actividad, issue, comentarios
+2. Seleccionás cuáles borrar (por número: `1,3`, rango: `1-3`, o `all`)
+3. Confirmás el borrado → se eliminan una por una
+4. Opcional: recargás cada entrada borrada con datos corregidos
+
+### Flags de redmine-entries.js
+
+| Flag | Descripción | Default |
+|------|-------------|---------|
+| `--list` | Listar entradas recientes | — |
+| `--days` | Cantidad de días hacia atrás | 7 |
+| `--delete` | ID(s) a borrar (separados por coma) | — |
+| `--interactive` | Modo interactivo completo | — |
+
 ## Manejo de errores
 
 - Login falla → actualizar credenciales en `.credentials`
 - Error en formulario → loguear, saltar entrada, continuar
 - Navegador crashea → cerrar y reintentar
+- Delete falla → mostrar error, continuar con la siguiente
 - Siempre cierra el navegador en finally

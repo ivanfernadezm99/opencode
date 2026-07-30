@@ -630,26 +630,99 @@ async function main() {
 
     // ── Verificar ──
     if (success > 0) {
-      console.log('\n  🔍 Verificando...');
+      console.log('\n  ╔═══════════════════════════════════════════════════════════════════════════════╗');
+      console.log('  ║                      VERIFICACIÓN DE HORAS CARGADAS                          ║');
+      console.log('  ╚═══════════════════════════════════════════════════════════════════════════════╝\n');
+
       const verifiedProjects = new Set();
       for (const entry of ENTRIES) {
         const project = entry.project || CONFIG.project;
         if (verifiedProjects.has(project)) continue;
         verifiedProjects.add(project);
 
-        const entryDates = ENTRIES.filter(e => (e.project || CONFIG.project) === project).map(e => e.date);
+        const projectEntries = ENTRIES.filter(e => (e.project || CONFIG.project) === project);
+        const entryDates = projectEntries.map(e => e.date);
         const sortedDates = [...new Set(entryDates)].sort();
-        console.log(`     📁 ${project}: verificando ${sortedDates[0]} → ${sortedDates[sortedDates.length - 1]}`);
+        const dateFrom = sortedDates[0];
+        const dateTo = sortedDates[sortedDates.length - 1];
+
+        console.log(`  📁 Proyecto: ${project}`);
+        console.log(`     ${dateFrom} → ${dateTo}\n`);
 
         await page.goto(
-          `${CONFIG.baseUrl}/projects/${project}/time_entries?set_filter=1&sort=spent_on:desc&f[]=spent_on&op[spent_on]=between&v[spent_on][]=${sortedDates[0]}&v[spent_on][]=${sortedDates[sortedDates.length - 1]}&f[]=user_id&op[user_id]==&v[user_id][]=me`,
+          `${CONFIG.baseUrl}/projects/${project}/time_entries?set_filter=1&sort=spent_on:desc&f[]=spent_on&op[spent_on]=between&v[spent_on][]=${dateFrom}&v[spent_on][]=${dateTo}&f[]=user_id&op[user_id]==&v[user_id][]=me&per_page=100`,
           { waitUntil: 'networkidle' }
         );
 
-        for (const e of ENTRIES.filter(en => (en.project || CONFIG.project) === project)) {
-          const row = await page.locator(`tr:has(td:text-is("${e.date}"))`).count();
-          console.log(`       ${e.date}: ${row > 0 ? '✅' : '⚠️  creada (revisar listado)'}`);
+        // Scrape actual entries from the table using CSS class selectors
+        const actualEntries = await page.$$eval('.time-entries tbody tr', (rows) => {
+          return rows.map((row) => {
+            const dateEl = row.querySelector('.spent_on');
+            const hoursEl = row.querySelector('.hours');
+            const activityEl = row.querySelector('.activity');
+            const issueEl = row.querySelector('.issue');
+            const commentsEl = row.querySelector('.comments');
+
+            if (!dateEl) return null;
+
+            const issueText = issueEl?.textContent?.trim().replace(/\s+/g, ' ') || '—';
+            const commentsText = commentsEl?.textContent?.trim() || '';
+
+            return {
+              id: row.id ? row.id.replace('time-entry-', '') : '?',
+              date: dateEl.textContent.trim(),
+              hours: hoursEl?.textContent?.trim() || '',
+              activity: activityEl?.textContent?.trim() || '',
+              issue: issueText,
+              comments: commentsText,
+            };
+          }).filter(Boolean);
+        });
+
+        if (actualEntries.length === 0) {
+          console.log('  ⚠️  No se encontraron entradas en el listado. Revisar manualmente.\n');
+          continue;
         }
+
+        // ── Print verification table ──
+        const separator = `  ┌──────┬────────────┬───────┬─────────────┬──────────────────┬─────────────────────┐`;
+        const header    = `  │  ID  │ Fecha      │ Horas │ Actividad   │ Issue            │ Comentario          │`;
+        const divider   = `  ├──────┼────────────┼───────┼─────────────┼──────────────────┼─────────────────────┤`;
+        const bottom    = `  └──────┴────────────┴───────┴─────────────┴──────────────────┴─────────────────────┘`;
+
+        console.log(separator);
+        console.log(header);
+        console.log(divider);
+
+        let totalHours = 0;
+
+        for (const act of actualEntries) {
+          const id = act.id.padEnd(4);
+          const date = act.date.padEnd(10);
+          const hours = act.hours.padEnd(5);
+          const activity = act.activity.padEnd(11);
+          const issue = act.issue.length > 16 ? act.issue.substring(0, 14) + '…' : act.issue.padEnd(16);
+          const comments = act.comments.length > 25 ? act.comments.substring(0, 23) + '…' : act.comments.padEnd(25);
+          const h = parseFloat(act.hours) || 0;
+          totalHours += h;
+
+          console.log(`  │ ${id} │ ${date} │ ${hours} │ ${activity} │ ${issue} │ ${comments} │`);
+        }
+        console.log(bottom);
+
+        // ── Summary ──
+        const daysCount = new Set(actualEntries.map(e => e.date)).size;
+        console.log(`\n  📊  ${actualEntries.length} entradas · ${daysCount} día(s) · ${totalHours.toFixed(2)} horas`);
+
+        // ── Check for missing dates ──
+        const foundDates = new Set(actualEntries.map(e => e.date));
+        for (const intended of projectEntries) {
+          if (!foundDates.has(intended.date)) {
+            console.log(`  ⚠️  Fecha ${intended.date} — NO encontrada en el listado`);
+          }
+        }
+
+        console.log('');
       }
     }
 

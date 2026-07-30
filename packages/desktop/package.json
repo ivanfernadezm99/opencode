@@ -1,12 +1,12 @@
 {
   "name": "@opencode-ai/desktop",
   "private": true,
-  "version": "1.17.15",
+  "version": "1.18.9",
   "type": "module",
   "license": "MIT",
   "homepage": "https://opencode.ai",
   "author": {
-    "name": "oneinfo",
+    "name": "OpenCode",
     "email": "hello@opencode.ai"
   },
   "scripts": {

@@ -8,6 +8,7 @@ import { UPDATER_ENABLED } from "./constants"
 import { createUpdaterController, type UpdaterReadyRecord, type UpdaterBackend } from "./updater-controller"
 import { getLogger } from "./logging"
 import { getStore } from "./store"
+import { setAppQuitting } from "./windows"
 
 const GITHUB_REPO = "ivanfernadezm99/opencode"
 const key = "ready"

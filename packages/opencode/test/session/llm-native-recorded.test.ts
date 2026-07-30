@@ -1,6 +1,5 @@
 import { ConfigV1 } from "@opencode-ai/core/v1/config/config"
 import { SessionV1 } from "@opencode-ai/core/v1/session"
-import { FSUtil } from "@opencode-ai/core/fs-util"
 import { ModelsDev } from "@opencode-ai/core/models-dev"
 import { HttpRecorder } from "@opencode-ai/http-recorder"
 import { HttpRecorderInternal } from "@opencode-ai/http-recorder/internal"
@@ -10,24 +9,21 @@ import { Effect, Layer, Option, Schema, Stream } from "effect"
 import path from "node:path"
 import z from "zod"
 import { Auth } from "@/auth"
-import { Config } from "@/config/config"
-import { Plugin } from "@/plugin"
 import { Provider } from "@/provider/provider"
-import { Budget } from "@/provider/budget"
-import { Identity } from "@/identity"
-import { ModelV2 } from "@opencode-ai/core/model"
-import { ProviderV2 } from "@opencode-ai/core/provider"
+
 
 import { Filesystem } from "@/util/filesystem"
 import { LLMEvent, LLMResponse } from "@opencode-ai/llm"
-import { LLMClient, RequestExecutor, WebSocketExecutor } from "@opencode-ai/llm/route"
-import { Env } from "@/env"
+import { RequestExecutor } from "@opencode-ai/llm/route"
 import { RuntimeFlags } from "@/effect/runtime-flags"
 import type { Agent } from "../../src/agent/agent"
 import { LLM } from "../../src/session/llm"
 import { MessageID, SessionID } from "../../src/session/schema"
 import { TestInstance } from "../fixture/fixture"
 import { testEffect } from "../lib/effect"
+import { AppNodeBuilder } from "@opencode-ai/core/effect/app-node-builder"
+import { LayerNode } from "@opencode-ai/core/effect/layer-node"
+import { LayerNodePlatform } from "@opencode-ai/core/effect/app-node-platform"
 
 const FIXTURES_DIR = path.join(import.meta.dir, "../fixtures/recordings")
 
@@ -242,7 +238,7 @@ const redactRecordedBody = (body: string) =>
 
 function authLayer(scenario: RecordedScenario) {
   const replayAuth = shouldRecord ? scenario.recordAuth?.() : scenario.replayAuth
-  if (!replayAuth) return Auth.defaultLayer
+  if (!replayAuth) return undefined
   return Layer.mock(Auth.Service)({
     get: (providerID) => Effect.succeed(providerID === scenario.providerID ? replayAuth : undefined),
     all: () => Effect.succeed({ [scenario.providerID]: replayAuth }),
@@ -264,15 +260,6 @@ const modelsFixture = Filesystem.readJson<Record<string, ModelsDev.Provider>>(
 
 function recordedNativeLLMLayer(scenario: RecordedScenario) {
   const auth = authLayer(scenario)
-  const provider = Provider.layer.pipe(
-    Layer.provide(FSUtil.defaultLayer),
-    Layer.provide(Env.defaultLayer),
-    Layer.provide(Config.defaultLayer),
-    Layer.provide(auth),
-    Layer.provide(Plugin.defaultLayer),
-    Layer.provide(ModelsDev.defaultLayer),
-    Layer.provide(RuntimeFlags.defaultLayer),
-  )
   // Only the HTTP client is recorded; RequestExecutor and the opencode LLM stack remain real.
   const metadata = {
     provider: scenario.providerID,
@@ -292,51 +279,11 @@ function recordedNativeLLMLayer(scenario: RecordedScenario) {
         redactor: HttpRecorderInternal.Redactor.make(redact),
       })
     : HttpRecorder.http(scenario.cassette, { directory: FIXTURES_DIR, metadata, redact })
-  const recordedClient = LLMClient.layer.pipe(
-    Layer.provide(Layer.mergeAll(RequestExecutor.layer.pipe(Layer.provide(recordedHttp)), WebSocketExecutor.layer)),
-  )
-
-  const mockBudget = Layer.succeed(
-    Budget.Service,
-    Budget.Service.of({
-      resolveModel: () => Effect.succeed({
-        action: "free",
-        modelId: ModelV2.ID.make("test"),
-        providerID: ProviderV2.ID.make("opencode"),
-      } satisfies Budget.ResolveModelResult),
-      deduct: () => Effect.void,
-      check: () => Effect.void,
-      credit: () => Effect.void,
-    }),
-  )
-
-  const mockIdentity = Layer.succeed(
-    Identity.Service,
-    Identity.Service.of({
-      upsertFromAuth: () => Effect.void,
-      getByID: () => Effect.succeed(null),
-      getCurrent: () => Effect.succeed(null),
-      requireAdmin: () => Effect.fail(new Identity.Unauthorized({ message: "mock" })),
-      listUsersWithBalances: () => Effect.succeed([]),
-      credit: () => Effect.succeed({ newBalance: 0, transactionId: 0 }),
-      stats: () => Effect.succeed({ totalUsers: 0, totalBalance: 0, totalUsedThisMonth: 0 }),
-      usageStats: () => Effect.succeed([]),
-    }),
-  )
-
-  return Layer.mergeAll(
-    provider,
-    LLM.layer.pipe(
-      Layer.provide(auth),
-      Layer.provide(Config.defaultLayer),
-      Layer.provide(provider),
-      Layer.provide(Plugin.defaultLayer),
-      Layer.provide(recordedClient),
-      Layer.provide(RuntimeFlags.layer({ experimentalNativeLlm: true })),
-      Layer.provide(mockBudget),
-      Layer.provide(mockIdentity),
-    ),
-  )
+  return AppNodeBuilder.build(LayerNode.group([Provider.node, LLM.node]), [
+    [LayerNodePlatform.requestExecutor, RequestExecutor.layer.pipe(Layer.provide(recordedHttp))],
+    [RuntimeFlags.node, RuntimeFlags.layer({ experimentalNativeLlm: true })],
+    ...(auth ? ([[Auth.node, auth]] as const) : []),
+  ])
 }
 
 const writeConfig = (directory: string, scenario: RecordedScenario, model: ModelsDev.Provider["models"][string]) =>
