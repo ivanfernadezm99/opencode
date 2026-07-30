@@ -218,6 +218,8 @@ export namespace FSUtil {
     }),
   )
 
+  export const defaultLayer = layer.pipe(Layer.provide(NodeFileSystem.layer))
+
   export const node = makeGlobalNode({ service: Service, layer: layer, deps: [filesystem] })
 
   // Pure helpers that don't need Effect (path manipulation, sync operations)

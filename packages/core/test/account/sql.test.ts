@@ -42,7 +42,9 @@ describe("token-management account schema", () => {
     })
 
     test("exposes the expected columns", () => {
-      expect(columnNames(TokenBalanceTable).sort()).toEqual(["balance", "lifetimeUsed", "updatedAt", "userId"].sort())
+      expect(columnNames(TokenBalanceTable).sort()).toEqual(
+        ["balance", "lastAllowanceMonth", "lifetimeUsed", "updatedAt", "userId"].sort(),
+      )
     })
 
     test("userId is the primary key and references user_identity", () => {

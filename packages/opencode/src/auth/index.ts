@@ -102,6 +102,8 @@ const layer = Layer.effect(
   }),
 )
 
+export const defaultLayer = layer
+
 export const node = LayerNode.make({ service: Service, layer: layer, deps: [FSUtil.node] })
 
 export { parseJwtClaims, extractIdentity, type JwtClaims, type IdentityFields } from "./jwt"

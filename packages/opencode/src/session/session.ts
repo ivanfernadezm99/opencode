@@ -1009,6 +1009,8 @@ function listByProject(
     )
 }
 
+export const defaultLayer = layer
+
 export const node = LayerNode.make({
   service: Service,
   layer: layer,

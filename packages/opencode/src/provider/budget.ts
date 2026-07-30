@@ -299,6 +299,6 @@ export const defaultLayer: Layer.Layer<Service> = Layer.suspend(() =>
   ),
 )
 
-export const node = LayerNode.make(layer, [Database.node, Provider.node])
+export const node = LayerNode.make({ service: Service, layer, deps: [Database.node, Provider.node] })
 
 export * as Budget from "./budget"

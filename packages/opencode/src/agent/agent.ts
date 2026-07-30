@@ -444,6 +444,8 @@ const locationServiceMapNode = LayerNode.make({
   deps: [],
 })
 
+export const defaultLayer = layer
+
 export const node = LayerNode.make({
   service: Service,
   layer: layer,

@@ -151,6 +151,8 @@ export const DiffInput = Schema.Struct({
 })
 export type DiffInput = Schema.Schema.Type<typeof DiffInput>
 
+export const defaultLayer = layer
+
 export const node = LayerNode.make({
   service: Service,
   layer: layer,
