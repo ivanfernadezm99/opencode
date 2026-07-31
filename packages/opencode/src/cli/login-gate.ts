@@ -73,7 +73,9 @@ async function checkAdminBypass(): Promise<boolean> {
   process.exit(1)
 }
 
-const hasMicrosoftAuth = Effect.gen(function* () {
+// Exported for tests: the auth-state helpers are pure Effect values that can
+// run against Auth.defaultLayer without network or TTY access.
+export const hasMicrosoftAuth = Effect.gen(function* () {
   const auth = yield* Auth.Service
   const existing = yield* auth.get("microsoft").pipe(Effect.catch(() => Effect.succeed(undefined)))
   if (!existing) return false
@@ -82,7 +84,7 @@ const hasMicrosoftAuth = Effect.gen(function* () {
   return true
 })
 
-const storeMicrosoftTokens = Effect.fn("LoginGate.storeMicrosoftTokens")(function* (tokens: {
+export const storeMicrosoftTokens = Effect.fn("LoginGate.storeMicrosoftTokens")(function* (tokens: {
   access_token: string
   refresh_token: string
   expires_in?: number
@@ -121,7 +123,7 @@ async function runMicrosoftOAuth(): Promise<void> {
 
   try {
     const tokens = await waitForOAuthCallback(pkce, state, config)
-    await Effect.runPromise(storeMicrosoftTokens(tokens).pipe(Effect.provide(Auth.defaultLayer)) as Effect<void, AuthError, never>)
+    await Effect.runPromise(storeMicrosoftTokens(tokens).pipe(Effect.provide(Auth.defaultLayer)))
     UI.println(UI.Style.TEXT_SUCCESS_BOLD + "OK" + UI.Style.TEXT_NORMAL + " Microsoft authentication successful")
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err)
@@ -141,7 +143,7 @@ export async function enforceMicrosoftLogin(): Promise<void> {
     return
   }
 
-  const alreadyAuthed = await Effect.runPromise(hasMicrosoftAuth.pipe(Effect.provide(Auth.defaultLayer)) as Effect<boolean, never, never>)
+  const alreadyAuthed = await Effect.runPromise(hasMicrosoftAuth.pipe(Effect.provide(Auth.defaultLayer)))
   if (alreadyAuthed) {
     return
   }

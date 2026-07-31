@@ -102,7 +102,11 @@ const layer = Layer.effect(
   }),
 )
 
-export const defaultLayer = layer
+// Self-contained: provides its own FSUtil so callers (login-gate, tests) can
+// use `Effect.provide(Auth.defaultLayer)` / `testEffect(Auth.defaultLayer)`
+// without supplying FSUtil separately. FSUtil is stateless, so this instance
+// is interchangeable with the app-level one.
+export const defaultLayer = layer.pipe(Layer.provide(FSUtil.defaultLayer))
 
 export const node = LayerNode.make({ service: Service, layer: layer, deps: [FSUtil.node] })
 
