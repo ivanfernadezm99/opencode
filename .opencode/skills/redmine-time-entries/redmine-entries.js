@@ -199,7 +199,7 @@ async function listEntries(page, config, days) {
   await page.goto(
     `${config.baseUrl}/projects/${config.project}/time_entries?set_filter=1` +
     `&sort=spent_on:desc` +
-    `&f[]=spent_on&op[spent_on]=between&v[spent_on][]=${from}&v[spent_on][]=${to}` +
+    `&f[]=spent_on&op[spent_on]=%3E%3C&v[spent_on][]=${from}&v[spent_on][]=${to}` +
     `&f[]=user_id&op[user_id]==&v[user_id][]=me` +
     `&per_page=100`,
     { waitUntil: 'networkidle' }

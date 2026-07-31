@@ -4,7 +4,7 @@ description: "Trigger: cargar horas, registrar horas, cargar tiempo, redmine hor
 license: Apache-2.0
 metadata:
   author: "servidor"
-  version: "2.3"
+  version: "2.4"
 ---
 
 ## Activación
@@ -122,6 +122,7 @@ bun load-hours.js --date 2026-07-17,2026-07-17 \
 - **Soportar múltiples proyectos en el mismo día.** Ej: 4h en Proyecto A (Desarrollo) y 4h en Proyecto B (Testing), misma fecha.
 - Con múltiples proyectos, pasar `--entries` JSON en vez de `--date`.
 - El **comment se auto-genera** a partir de los commits del día si no se especifica. Arma un resumen descriptivo como `"skills: multi-project, credential flow | installer: tests, docs"`.
+- El **detail se auto-genera en español**: resumen del día + sección Engram + hashes de commits (sin subjects en inglés).
 
 ## Archivos de configuración
 

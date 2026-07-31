@@ -340,9 +340,16 @@ function formatAutoDetail(date) {
   const gitLog = queryGitLog(date);
   const parts = [];
 
-  // Git log section
+  // Resumen en español (misma lógica que el auto-comment)
+  const summary = generateAutoComment(date);
+  if (summary) parts.push('## Resumen del día', summary);
+
+  // Referencias de commits (solo hashes, sin subjects en inglés)
   if (gitLog) {
-    parts.push('## Commits del día', gitLog);
+    const hashes = gitLog.split('\n').map(l => l.trim()).filter(Boolean)
+      .map(l => (l.match(/\(([a-f0-9]{7,})\)$/) || [])[1])
+      .filter(Boolean);
+    if (hashes.length > 0) parts.push(`## Commits: ${hashes.join(', ')}`);
   }
 
   // Engram section
@@ -650,7 +657,7 @@ async function main() {
         console.log(`     ${dateFrom} → ${dateTo}\n`);
 
         await page.goto(
-          `${CONFIG.baseUrl}/projects/${project}/time_entries?set_filter=1&sort=spent_on:desc&f[]=spent_on&op[spent_on]=between&v[spent_on][]=${dateFrom}&v[spent_on][]=${dateTo}&f[]=user_id&op[user_id]==&v[user_id][]=me&per_page=100`,
+          `${CONFIG.baseUrl}/projects/${project}/time_entries?set_filter=1&sort=spent_on:desc&f[]=spent_on&op[spent_on]=%3E%3C&v[spent_on][]=${dateFrom}&v[spent_on][]=${dateTo}&f[]=user_id&op[user_id]==&v[user_id][]=me&per_page=100`,
           { waitUntil: 'networkidle' }
         );
 
