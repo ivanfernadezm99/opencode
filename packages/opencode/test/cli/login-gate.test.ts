@@ -31,9 +31,13 @@ void mock.module("../../src/cli/ui", () => ({
 }))
 
 // The OAuth flow is never supposed to run in these tests. If a regression lets
-// the gate fall through to it, this stub keeps a real browser from opening;
-// the flow still hangs waiting for a callback, which the withTimeout guard
-// reports as a test failure.
+// the gate fall through to it, this stub keeps a real browser from opening.
+// NOTE: the flow would still hang waiting for a callback — withTimeout rejects
+// the assertion at 2s, but the dangling runMicrosoftOAuth keeps the OAuth
+// server bound on port 53800 and only rejects after the ~5min callback
+// timeout, at which point login-gate's catch calls process.exit(1), killing
+// the whole test process. Fixing that (injectable layer / cancellable flow)
+// is tracked; the stub at least prevents the real-browser side effect.
 void mock.module("open", () => ({
   default: async () => {
     throw new Error("browser open() stubbed — OAuth flow should never be reached in login-gate tests")
