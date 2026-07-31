@@ -1,7 +1,7 @@
 import { NodeHttpServer } from "@effect/platform-node"
 import { describe, expect } from "bun:test"
-import { Context, Effect, Layer, Option } from "effect"
-import { HttpBody, HttpClient, HttpClientRequest, HttpRouter } from "effect/unstable/http"
+import { Context, Effect, FileSystem, Layer, Option, Path } from "effect"
+import { Etag, HttpBody, HttpClient, HttpClientRequest, HttpPlatform, HttpRouter, HttpServer } from "effect/unstable/http"
 import { HttpApiBuilder } from "effect/unstable/httpapi"
 import { Auth } from "../../src/auth"
 import { Config } from "../../src/config/config"
@@ -74,7 +74,14 @@ const apiLayer = HttpRouter.serve(
   })),
   Layer.provide(ServerAuth.Config.configLayer({ password: Option.none(), username: "opencode" })),
 )
-const it = testEffect(apiLayer as unknown as Layer.Layer<FileSystem | Generator | HttpClient | HttpPlatform | HttpServer | Path>)
+// The identityAdminLayer cast above erases the layer's static requirements, so
+// re-declare the services the in-process server provides at runtime (mirrors
+// NodeHttpServer.layerTest outputs) for the test body type-check.
+const it = testEffect(
+  apiLayer as unknown as Layer.Layer<
+    FileSystem.FileSystem | Etag.Generator | HttpClient.HttpClient | HttpPlatform.HttpPlatform | HttpServer.HttpServer | Path.Path
+  >,
+)
 
 describe("Identity & Admin HttpApi", () => {
   describe("GET /identity/me", () => {
