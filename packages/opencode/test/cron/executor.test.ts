@@ -13,7 +13,7 @@ import { CronExecutor } from "../../src/cron/executor"
 
 describe("CronJobs.markRunning", () => {
   const providerLayer = Layer.mergeAll(CoreDatabase.layerFromPath(":memory:"))
-  const testLayer = CronJobs.defaultLayer.pipe(Layer.provide(providerLayer))
+  const testLayer = CronJobs.defaultLayer.pipe(Layer.provide(providerLayer)) as Layer.Layer<CronJobs.Service>
   const it = testEffect(testLayer)
 
   it.live("transitions state from scheduled to running", () =>
@@ -84,7 +84,7 @@ describe("output path formatting", () => {
 
 describe("CronExecutor error recording", () => {
   const providerLayer = Layer.mergeAll(CoreDatabase.layerFromPath(":memory:"))
-  const testLayer = CronJobs.defaultLayer.pipe(Layer.provide(providerLayer))
+  const testLayer = CronJobs.defaultLayer.pipe(Layer.provide(providerLayer)) as Layer.Layer<CronJobs.Service>
   const it = testEffect(testLayer)
 
   it.live("markJobRun with error status and message records correctly", () =>

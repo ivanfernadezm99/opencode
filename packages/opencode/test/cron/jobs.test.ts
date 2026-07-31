@@ -302,7 +302,7 @@ describe("computeGraceMs", () => {
 
 describe("CronJobs service", () => {
   const providerLayer = Layer.mergeAll(CoreDatabase.layerFromPath(":memory:"))
-  const testLayer = CronJobs.defaultLayer.pipe(Layer.provide(providerLayer))
+  const testLayer = CronJobs.defaultLayer.pipe(Layer.provide(providerLayer)) as Layer.Layer<CronJobs.Service>
   const it = testEffect(testLayer)
 
   it.live("create inserts a job and returns it", () =>

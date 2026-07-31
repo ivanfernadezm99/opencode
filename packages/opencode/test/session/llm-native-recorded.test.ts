@@ -10,7 +10,7 @@ import path from "node:path"
 import z from "zod"
 import { Auth } from "@/auth"
 import { Provider } from "@/provider/provider"
-
+import { ModelV2 } from "@opencode-ai/core/model"
 
 import { Filesystem } from "@/util/filesystem"
 import { LLMEvent, LLMResponse } from "@opencode-ai/llm"
@@ -40,7 +40,7 @@ const replayOpenAIOAuth = {
 type RecordedScenario = {
   readonly id: string
   readonly name: string
-  readonly providerID: ProviderV2.ID
+  readonly providerID: Provider.ID
   readonly modelID: string
   readonly cassette: string
   readonly protocol: string
@@ -89,7 +89,7 @@ function decodeRecordOpenAIOAuth() {
 }
 
 const providerConfig = (input: {
-  readonly providerID: ProviderV2.ID
+  readonly providerID: Provider.ID
   readonly name: string
   readonly env: string[]
   readonly npm: string
@@ -114,7 +114,7 @@ const RECORDED_SCENARIOS = [
   {
     id: "openai-api-key",
     name: "OpenAI API key",
-    providerID: ProviderV2.ID.openai,
+    providerID: Provider.ID.openai,
     modelID: "gpt-4.1-mini",
     cassette: "session/native-openai-tool-loop",
     protocol: "openai-responses",
@@ -122,7 +122,7 @@ const RECORDED_SCENARIOS = [
     canRecord: () => Boolean(envValue("OPENCODE_RECORD_OPENAI_API_KEY", "OPENAI_API_KEY")),
     config: (model) =>
       providerConfig({
-        providerID: ProviderV2.ID.openai,
+        providerID: Provider.ID.openai,
         name: "OpenAI",
         env: ["OPENAI_API_KEY"],
         npm: "@ai-sdk/openai",
@@ -137,7 +137,7 @@ const RECORDED_SCENARIOS = [
   {
     id: "openai-oauth",
     name: "OpenAI OAuth",
-    providerID: ProviderV2.ID.openai,
+    providerID: Provider.ID.openai,
     modelID: "gpt-5.5",
     cassette: "session/native-openai-oauth-tool-loop",
     protocol: "openai-responses",
@@ -148,7 +148,7 @@ const RECORDED_SCENARIOS = [
     stableID: "openai-oauth",
     config: (model) =>
       providerConfig({
-        providerID: ProviderV2.ID.openai,
+        providerID: Provider.ID.openai,
         name: "OpenAI",
         env: ["OPENAI_API_KEY"],
         npm: "@ai-sdk/openai",
@@ -160,7 +160,7 @@ const RECORDED_SCENARIOS = [
   {
     id: "opencode-proxy",
     name: "OpenCode proxy",
-    providerID: ProviderV2.ID.opencode,
+    providerID: Provider.ID.opencode,
     modelID: "gpt-5.2-codex",
     cassette: "session/native-zen-tool-loop",
     protocol: "openai-responses",
@@ -168,7 +168,7 @@ const RECORDED_SCENARIOS = [
     canRecord: () => Boolean(process.env.OPENCODE_RECORD_CONSOLE_TOKEN && process.env.OPENCODE_RECORD_ZEN_ORG_ID),
     config: (model) =>
       providerConfig({
-        providerID: ProviderV2.ID.opencode,
+        providerID: Provider.ID.opencode,
         name: "OpenCode Zen",
         env: ["OPENCODE_CONSOLE_TOKEN"],
         npm: "@ai-sdk/openai-compatible",
@@ -183,7 +183,7 @@ const RECORDED_SCENARIOS = [
   {
     id: "anthropic-api-key",
     name: "Anthropic API key",
-    providerID: ProviderV2.ID.anthropic,
+    providerID: Provider.ID.anthropic,
     modelID: "claude-haiku-4-5-20251001",
     cassette: "session/native-anthropic-tool-loop",
     protocol: "anthropic-messages",
@@ -191,7 +191,7 @@ const RECORDED_SCENARIOS = [
     canRecord: () => Boolean(envValue("OPENCODE_RECORD_ANTHROPIC_API_KEY", "ANTHROPIC_API_KEY")),
     config: (model) =>
       providerConfig({
-        providerID: ProviderV2.ID.anthropic,
+        providerID: Provider.ID.anthropic,
         name: "Anthropic",
         env: ["ANTHROPIC_API_KEY"],
         npm: "@ai-sdk/anthropic",

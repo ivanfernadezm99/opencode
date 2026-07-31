@@ -175,6 +175,7 @@ export const FilePart = Schema.Struct({
   filename: Schema.optional(Schema.String),
   url: Schema.String,
   source: Schema.optional(FilePartSource),
+  metadata: Schema.optional(Schema.Record(Schema.String, Schema.Any)),
 }).annotate({ identifier: "FilePart" })
 export type FilePart = Types.DeepMutable<Schema.Schema.Type<typeof FilePart>>
 

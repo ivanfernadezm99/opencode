@@ -72,9 +72,9 @@ const apiLayer = HttpRouter.serve(
         transactionId: 1,
       }),
   })),
-  Layer.provide(ServerAuth.Config.layer({ password: Option.none(), username: "opencode" })),
+  Layer.provide(ServerAuth.Config.configLayer({ password: Option.none(), username: "opencode" })),
 )
-const it = testEffect(apiLayer)
+const it = testEffect(apiLayer as unknown as Layer.Layer<FileSystem | Generator | HttpClient | HttpPlatform | HttpServer | Path>)
 
 describe("Identity & Admin HttpApi", () => {
   describe("GET /identity/me", () => {

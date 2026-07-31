@@ -2008,4 +2008,5 @@ export const node = LayerNode.make({
   deps: [FSUtil.node, Config.node, Auth.node, Env.node, Plugin.node, ModelsDev.node, RuntimeFlags.node],
 })
 
+export { ID } from "@opencode-ai/core/provider"
 export * as Provider from "./provider"

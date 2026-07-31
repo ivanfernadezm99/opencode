@@ -1,13 +1,12 @@
 import { describe, expect, test } from "bun:test"
 import { Effect, Layer, Schema } from "effect"
-import { CrossSpawnSpawner } from "@opencode-ai/core/cross-spawn-spawner"
 import { Auth, Oauth } from "../../src/auth"
 import { testEffect } from "../lib/effect"
 
 const decodeOauth = Schema.decodeUnknownSync(Oauth)
 const encodeOauth = Schema.encodeUnknownSync(Oauth)
 
-const it = testEffect(Layer.mergeAll(Auth.defaultLayer, CrossSpawnSpawner.defaultLayer))
+const it = testEffect(Auth.defaultLayer)
 
 describe("Oauth schema widening", () => {
   test("decodes legacy payload without identity fields", () => {

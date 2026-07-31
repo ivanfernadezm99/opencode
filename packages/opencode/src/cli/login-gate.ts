@@ -121,7 +121,7 @@ async function runMicrosoftOAuth(): Promise<void> {
 
   try {
     const tokens = await waitForOAuthCallback(pkce, state, config)
-    await Effect.runPromise(storeMicrosoftTokens(tokens).pipe(Effect.provide(Auth.defaultLayer)))
+    await Effect.runPromise(storeMicrosoftTokens(tokens).pipe(Effect.provide(Auth.defaultLayer)) as Effect<void, AuthError, never>)
     UI.println(UI.Style.TEXT_SUCCESS_BOLD + "OK" + UI.Style.TEXT_NORMAL + " Microsoft authentication successful")
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err)
@@ -141,7 +141,7 @@ export async function enforceMicrosoftLogin(): Promise<void> {
     return
   }
 
-  const alreadyAuthed = await Effect.runPromise(hasMicrosoftAuth.pipe(Effect.provide(Auth.defaultLayer)))
+  const alreadyAuthed = await Effect.runPromise(hasMicrosoftAuth.pipe(Effect.provide(Auth.defaultLayer)) as Effect<boolean, never, never>)
   if (alreadyAuthed) {
     return
   }

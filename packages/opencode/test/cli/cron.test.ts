@@ -20,6 +20,7 @@ function makeJob(overrides: Partial<CronJobs.CronJob> = {}): CronJobs.CronJob {
     skills: null,
     workdir: null,
     repeat_times: null,
+    notify: 0,
     repeat_done: 0,
     time_created: now,
     time_updated: now,

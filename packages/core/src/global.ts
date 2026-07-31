@@ -71,7 +71,7 @@ export function make(input: Partial<Interface> = {}): Interface {
   }
 }
 
-const layer = Layer.effect(
+export const layer = Layer.effect(
   Service,
   Effect.sync(() => Service.of(make())),
 )

@@ -292,12 +292,12 @@ export const layer = Layer.effect(
 
 // --- Default (composed) layer ---
 
-export const defaultLayer: Layer.Layer<Service> = Layer.suspend(() =>
+export const defaultLayer = Layer.suspend(() =>
   layer.pipe(
     Layer.provide(Database.defaultLayer),
     Layer.provide(Provider.defaultLayer),
   ),
-)
+) as Layer.Layer<Service>
 
 export const node = LayerNode.make({ service: Service, layer, deps: [Database.node, Provider.node] })
 

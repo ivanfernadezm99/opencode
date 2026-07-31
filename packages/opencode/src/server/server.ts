@@ -134,7 +134,7 @@ const listenEffect: (opts: ListenOptions) => Effect.Effect<EffectListener, unkno
       stop: yield* makeStop(state, unpublishMdns, listenerUrl),
     }
   },
-)
+) as (opts: ListenOptions) => Effect.Effect<EffectListener, unknown>
 
 function listenerLayer(opts: ListenOptions, port: number) {
   return HttpRouter.serve(HttpApiApp.createRoutes(opts), {
