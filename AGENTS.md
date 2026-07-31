@@ -153,6 +153,7 @@ const table = sqliteTable("session", {
 
 ## Type Checking
 
+- WARNING: do NOT run `bun typecheck` from `packages/opencode` (runs `tsgo --noEmit`) — user-reported that it breaks the running opencode instance. Ask the user before running typecheck inside this package.
 - Always run `bun typecheck` from package directories (e.g., `packages/opencode`), never `tsc` directly.
 
 ## V2 Session Core

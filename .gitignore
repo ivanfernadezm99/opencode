@@ -35,3 +35,6 @@ tsconfig.tsbuildinfo
 
 # Skill registry
 .atl/
+
+# SDD local workdir (artifacts live in Engram / openspec)
+sdd/
