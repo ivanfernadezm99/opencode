@@ -1,10 +1,12 @@
 import { describe, expect } from "bun:test"
-import { LayerNode } from "@opencode-ai/core/effect/layer-node"
 import { Effect } from "effect"
 import { Auth } from "../../src/auth"
-import { testEffect } from "../lib/effect"
+import { createAuthIsolation } from "../lib/auth-isolation"
 
-const it = testEffect(LayerNode.compile(Auth.node))
+// Isolated auth store (unique temp file per test file) — never touches the
+// real ~/.local/share/opencode/auth.json, even without the test preload.
+const { testEffectAuth } = createAuthIsolation()
+const it = testEffectAuth()
 
 describe("Auth", () => {
   it.instance("set normalizes trailing slashes in keys", () =>

@@ -1,12 +1,15 @@
 import { describe, expect, test } from "bun:test"
-import { Effect, Layer, Schema } from "effect"
+import { Effect, Schema } from "effect"
 import { Auth, Oauth } from "../../src/auth"
-import { testEffect } from "../lib/effect"
+import { createAuthIsolation } from "../lib/auth-isolation"
 
 const decodeOauth = Schema.decodeUnknownSync(Oauth)
 const encodeOauth = Schema.encodeUnknownSync(Oauth)
 
-const it = testEffect(Auth.defaultLayer)
+// Isolated auth store (unique temp file per test file) — never touches the
+// real ~/.local/share/opencode/auth.json, even without the test preload.
+const { testEffectAuth } = createAuthIsolation()
+const it = testEffectAuth()
 
 describe("Oauth schema widening", () => {
   test("decodes legacy payload without identity fields", () => {
