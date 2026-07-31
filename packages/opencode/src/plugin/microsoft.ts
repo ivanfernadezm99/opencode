@@ -1,4 +1,5 @@
 import type { Hooks, PluginInput } from "@opencode-ai/plugin"
+import type { Model } from "@opencode-ai/sdk/v2"
 import { OAUTH_DUMMY_KEY, extractIdentity } from "../auth"
 import { createServer } from "http"
 import { InstallationVersion } from "@opencode-ai/core/installation/version"
@@ -61,6 +62,73 @@ function getConfig(options: MicrosoftAuthPluginOptions = {}): MicrosoftConfig {
     clientId: options.clientId ?? process.env["MICROSOFT_CLIENT_ID"] ?? CLIENT_ID,
     scopes: options.scopes ?? DEFAULT_SCOPES,
     redirectUri: options.redirectUri ?? REDIRECT_URI,
+  }
+}
+
+// --- GitHub Models Inference ---
+//
+// The provider surface points at GitHub Models inference. Authentication is the
+// Microsoft OAuth access token attached as a Bearer header by the auth loader
+// below; there is intentionally no apiKey here.
+
+const GITHUB_MODELS_INFERENCE_URL = "https://models.github.ai/inference"
+
+const DEFAULT_MICROSOFT_MODELS = [
+  "gpt-4.1",
+  "gpt-4.1-mini",
+  "gpt-4.1-nano",
+  "gpt-4o",
+  "gpt-4o-mini",
+  "o3-mini",
+  "o4-mini",
+  "gpt-5",
+  "gpt-5-mini",
+]
+
+// Env vars are read at hook call time so tests can override them without
+// touching module state.
+export function readMicrosoftModels(): string[] {
+  const override = process.env["MICROSOFT_MODELS"]
+  if (!override) return DEFAULT_MICROSOFT_MODELS
+  return override
+    .split(",")
+    .map((id) => id.trim())
+    .filter(Boolean)
+}
+
+export function readMicrosoftModelsBaseURL(): string {
+  return process.env["MICROSOFT_MODELS_BASE_URL"] ?? GITHUB_MODELS_INFERENCE_URL
+}
+
+function microsoftModelContext(id: string): number {
+  if (id.startsWith("o3-mini") || id.startsWith("o4-mini")) return 200_000
+  if (id.startsWith("gpt-5")) return 272_000
+  if (id.startsWith("gpt-4.1")) return 1_047_576
+  return 128_000
+}
+
+export function makeMicrosoftModel(id: string): Model {
+  return {
+    id,
+    providerID: "microsoft",
+    name: id,
+    api: { id, url: readMicrosoftModelsBaseURL(), npm: "@ai-sdk/openai-compatible" },
+    status: "active",
+    headers: {},
+    options: {},
+    cost: { input: 0, output: 0, cache: { read: 0, write: 0 } },
+    limit: { context: microsoftModelContext(id), output: 32_768 },
+    capabilities: {
+      temperature: true,
+      reasoning: false,
+      attachment: false,
+      toolcall: true,
+      input: { text: true, audio: false, image: false, video: false, pdf: false },
+      output: { text: true, audio: false, image: false, video: false, pdf: false },
+      interleaved: false,
+    },
+    release_date: "",
+    variants: {},
   }
 }
 
@@ -643,6 +711,12 @@ export async function MicrosoftAuthPlugin(
   const config = getConfig(options)
 
   return {
+    provider: {
+      id: "microsoft",
+      async models() {
+        return Object.fromEntries(readMicrosoftModels().map((id) => [id, makeMicrosoftModel(id)]))
+      },
+    },
     auth: {
       provider: "microsoft",
       async loader(getAuth) {

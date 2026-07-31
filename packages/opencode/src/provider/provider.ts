@@ -1370,9 +1370,23 @@ const layer = Layer.effect(
             return
           }
           const match = database[providerID]
-          if (!match) return
-          // @ts-expect-error
-          providers[providerID] = mergeDeep(match, provider)
+          if (match) {
+            // @ts-expect-error
+            providers[providerID] = mergeDeep(match, provider)
+            return
+          }
+          // Plugin-defined providers may not exist in the models.dev catalog
+          // (e.g. microsoft). Register a minimal provider from the patch so the
+          // plugin still shows up in the UI.
+          providers[providerID] = {
+            id: providerID,
+            name: provider.name ?? providerID,
+            source: provider.source ?? "custom",
+            env: provider.env ?? [],
+            ...(provider.key !== undefined ? { key: provider.key } : {}),
+            options: provider.options ?? {},
+            models: {},
+          }
         }
 
         // load plugins first so config() hook runs before reading cfg.provider
@@ -1397,9 +1411,20 @@ const layer = Layer.effect(
           const providerID = ProviderV2.ID.make(p.id)
           if (disabled.has(providerID)) continue
 
-          const provider = database[providerID]
-          if (!provider) continue
-          const pluginAuth = yield* auth.get(providerID).pipe(Effect.orDie)
+          // Plugin-only providers have no models.dev entry. Create a stub in the
+          // database first so the hook's model list survives downstream merges.
+          const dbProvider = database[providerID]
+          const provider: Info = dbProvider ?? {
+            id: providerID,
+            name: providerID,
+            source: "custom",
+            env: [],
+            options: {},
+            models: {},
+          }
+          if (!dbProvider) database[providerID] = provider
+          // The admin-bypass path has no auth entry for the plugin; do not die.
+          const pluginAuth = yield* auth.get(providerID).pipe(Effect.catch(() => Effect.succeed(undefined)))
 
           provider.models = yield* Effect.promise(async () => {
             const next = await models(toPublicInfo(provider), { auth: pluginAuth })
@@ -1551,12 +1576,20 @@ const layer = Layer.effect(
           if (!plugin.auth.loader) continue
 
           const dbEntry = database[providerID]
-          if (!dbEntry) continue
+          // Plugin-only providers have no models.dev entry; still run the loader.
+          const loaderEntry: Info = dbEntry ?? {
+            id: providerID,
+            name: providerID,
+            source: "custom",
+            env: [],
+            options: {},
+            models: {},
+          }
 
           const options = yield* Effect.promise(() =>
             plugin.auth!.loader!(
               () => bridge.promise(auth.get(providerID).pipe(Effect.orDie)) as any,
-              toPublicInfo(dbEntry),
+              toPublicInfo(loaderEntry),
             ),
           )
           const opts = options ?? {}

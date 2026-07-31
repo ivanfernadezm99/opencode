@@ -2005,6 +2005,44 @@ it.instance(
   }),
 )
 
+it.instance(
+  "plugin-only provider without a models.dev entry registers its declared models (microsoft SSO)",
+  Effect.gen(function* () {
+    // Replicates the Microsoft SSO bug: auth.json holds only a microsoft OAuth
+    // entry, there are no API keys, and models.dev (the fixture catalog) has no
+    // microsoft provider. The bundled MicrosoftAuthPlugin declares provider +
+    // models, so provider init must register microsoft with its declared models
+    // instead of dropping it at the missing-catalog-entry guards.
+    yield* set(
+      "OPENCODE_AUTH_CONTENT",
+      JSON.stringify({
+        microsoft: {
+          type: "oauth",
+          refresh: "test-refresh",
+          access: "test-access",
+          expires: Date.now() + 3_600_000,
+        },
+      }),
+    )
+    // The plugin's model surface reads these env vars at hook call time; clear
+    // them so the assertions below see the defaults, not ambient overrides.
+    yield* remove("MICROSOFT_MODELS")
+    yield* remove("MICROSOFT_MODELS_BASE_URL")
+
+    const providers = yield* list
+    const microsoft = providers[ProviderV2.ID.make("microsoft")]
+    expect(microsoft).toBeDefined()
+    expect(microsoft.source).toBe("custom")
+    expect(Object.keys(microsoft.models).length).toBeGreaterThan(0)
+
+    const model = microsoft.models[ModelV2.ID.make("gpt-4.1")]
+    expect(model).toBeDefined()
+    expect(model.api.npm).toBe("@ai-sdk/openai-compatible")
+    expect(model.api.url).toBe("https://models.github.ai/inference")
+    expect(model.limit.context).toBeGreaterThan(0)
+  }),
+)
+
 it.effect("opencode loader keeps paid models when config apiKey is present", () =>
   Effect.gen(function* () {
     const noneDir = yield* tmpdirScoped()
