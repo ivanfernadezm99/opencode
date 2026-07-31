@@ -77,11 +77,15 @@ type AuthCallbackResult =
 
 ### Existing OAuth Providers
 
+The following OAuth providers are registered in the system, including the Microsoft provider added by the `microsoft-auth` capability.
+
 | Provider | Auth Method | Implementation |
 |----------|-------------|----------------|
-| **GitHub Copilot** | Device Code Flow | `packages/core/src/plugin/provider/github-copilot.ts` + `packages/core/src/github-copilot/copilot-provider.ts` |
+| **GitHub Copilot** | Device Code Flow | `packages/core/src/plugin/provider/github-copilot.ts` |
 | **OpenAI (Codex)** | OAuth (Authorization Code + PKCE) | `packages/opencode/src/plugin/openai/codex.ts` |
-| **Azure** | API Key (no OAuth) | `packages/core/src/plugin/provider/azure.ts` — uses `AZURE_RESOURCE_NAME` env var |
+| **Microsoft** | OAuth (Auth Code + PKCE + Device Code) | `packages/opencode/src/plugin/microsoft.ts` |
+| **xAI (Grok)** | OAuth (Auth Code + PKCE + Device Code) | `packages/opencode/src/plugin/xai.ts` |
+| **Azure** | API Key (no OAuth) | `packages/core/src/plugin/provider/azure.ts` |
 | **Google Vertex** | API Key + custom fetch | `packages/core/src/plugin/provider/google-vertex.ts` |
 
 ### Console Web Auth (`packages/console/function/src/auth.ts`)
@@ -97,40 +101,18 @@ Plugins register via `PluginV2.define()` returning hooks including `auth`:
 - `packages/core/src/plugin/provider/*.ts` — each provider plugin
 - Hooks collected by `ProviderAuth` service via `Plugin.Service.list()`
 
-## Gap Analysis for Microsoft Entra ID
+## Requirements
 
-### What's Missing
+### Requirement: Provider ID Registration
 
-1. **No Microsoft/Entra ID provider plugin** — No `microsoft.ts` in `packages/core/src/plugin/provider/`
-2. **No Authorization Code + PKCE implementation** for Microsoft endpoints:
-   - Authorize: `https://login.microsoftonline.com/{tenant}/oauth2/v2.0/authorize`
-   - Token: `https://login.microsoftonline.com/{tenant}/oauth2/v2.0/token`
-3. **No Microsoft Graph scope handling** — Need `openid`, `email`, `profile`, `offline_access`
-4. **No tenant configuration** — Support `common`, `organizations`, `consumers`, or specific tenant ID
-5. **No client secret handling** — Public client (CLI) should use PKCE only; confidential client (console) may use client secret
+The system MUST recognize `microsoft` as a well-known `ProviderV2.ID`.
 
-### Required Implementation
+#### Scenario: microsoft in provider ID list
 
-1. **New plugin**: `packages/core/src/plugin/provider/microsoft.ts`
-2. **AuthHook with**:
-   - `provider: "microsoft"`
-   - `methods: [{ type: "oauth", label: "Microsoft Account", authorize: ..., ... }]`
-3. **PKCE generation**: `code_verifier` (43-128 chars), `code_challenge` (S256)
-4. **Local callback server**: `http://localhost:3000/callback` (or configurable port)
-5. **Token exchange**: POST to token endpoint with `grant_type=authorization_code`, `code_verifier`
-6. **Token refresh**: POST with `grant_type=refresh_token`
-7. **Account ID extraction**: From ID token `oid` or `sub` claim
-
-### Microsoft-Specific Considerations
-
-| Aspect | Detail |
-|--------|--------|
-| **Endpoints** | v2.0: `/common/`, `/organizations/`, `/consumers/`, `/{tenant}/` |
-| **Scopes** | `openid email profile offline_access` + optional `https://graph.microsoft.com/.default` |
-| **Tokens** | Access token (JWT), Refresh token (opaque), ID token (JWT with claims) |
-| **PKCE** | Required for public clients (S256) |
-| **Client type** | Public client (CLI) = no client secret; Confidential (console) = client secret |
-| **Multi-tenant** | Use `/common/` endpoint, validate `tid` claim in ID token |
+- GIVEN the provider ID registry
+- WHEN `ProviderV2.ID.make("microsoft")` is called
+- THEN it returns a valid branded string
+- AND it is usable as a provider key in auth storage and model routing
 
 ## Non-Goals
 
