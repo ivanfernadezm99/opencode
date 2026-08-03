@@ -12,6 +12,16 @@ export { pathKey as directoryKey, type PathKey as DirectoryKey } from "@/utils/p
 
 export const cmp = (a: string, b: string) => (a < b ? -1 : a > b ? 1 : 0)
 
+function isAgent(value: unknown): value is Agent {
+  return (
+    typeof value === "object" &&
+    value !== null &&
+    !Array.isArray(value) &&
+    typeof (value as { name?: unknown }).name === "string" &&
+    typeof (value as { mode?: unknown }).mode === "string"
+  )
+}
+
 export function normalizeAgentList(input: AgentListOutput["data"] | Agent[]): Agent[]
 export function normalizeAgentList(input: unknown): Agent[] {
   if (Array.isArray(input)) {
