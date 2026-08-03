@@ -44,38 +44,46 @@ export const createAuthIsolation = () => {
     await NFS.rm(authTestFile, { force: true })
   })
 
-  // Only readJson/writeJson are exercised by Auth; anything else throws the
-  // Layer.mock UnimplementedError, which is exactly the signal we want if Auth
-  // ever grows a new filesystem dependency.
-  const redirectLayer = Layer.mock(FSUtil.Service, {
-    readJson: (filePath) =>
-      isAuthFile(filePath)
-        ? Effect.tryPromise({
-            try: async () => JSON.parse(await NFS.readFile(authTestFile, "utf8")),
-            catch: (cause) => new FSUtil.FileSystemError({ method: "readJson", cause }),
-          })
-        : Effect.fail(
-            new FSUtil.FileSystemError({
-              method: "readJson",
-              cause: new Error(`unexpected non-auth read: ${filePath}`),
-            }),
-          ),
-    writeJson: (filePath, data, mode) =>
-      isAuthFile(filePath)
-        ? Effect.tryPromise({
-            try: async () => {
-              await NFS.writeFile(authTestFile, JSON.stringify(data, null, 2))
-              if (mode !== undefined) await NFS.chmod(authTestFile, mode)
-            },
-            catch: (cause) => new FSUtil.FileSystemError({ method: "writeJson", cause }),
-          })
-        : Effect.fail(
-            new FSUtil.FileSystemError({
-              method: "writeJson",
-              cause: new Error(`unexpected non-auth write: ${filePath}`),
-            }),
-          ),
-  })
+  // Only readJson/writeJson are exercised by Auth. Build the redirect on top of
+  // the real FSUtil service so the full Interface shape (which extends
+  // FileSystem.FileSystem) is preserved; readJson/writeJson are intercepted so
+  // Auth can never touch the real store, and any non-auth path fails loudly.
+  const redirectLayer = Layer.effect(
+    FSUtil.Service,
+    Effect.gen(function* () {
+      const fs = yield* FSUtil.Service
+      return FSUtil.Service.of({
+        ...fs,
+        readJson: (filePath) =>
+          isAuthFile(filePath)
+            ? Effect.tryPromise({
+                try: async () => JSON.parse(await NFS.readFile(authTestFile, "utf8")),
+                catch: (cause) => new FSUtil.FileSystemError({ method: "readJson", cause }),
+              })
+            : Effect.fail(
+                new FSUtil.FileSystemError({
+                  method: "readJson",
+                  cause: new Error(`unexpected non-auth read: ${filePath}`),
+                }),
+              ),
+        writeJson: (filePath, data, mode) =>
+          isAuthFile(filePath)
+            ? Effect.tryPromise({
+                try: async () => {
+                  await NFS.writeFile(authTestFile, JSON.stringify(data, null, 2))
+                  if (mode !== undefined) await NFS.chmod(authTestFile, mode)
+                },
+                catch: (cause) => new FSUtil.FileSystemError({ method: "writeJson", cause }),
+              })
+            : Effect.fail(
+                new FSUtil.FileSystemError({
+                  method: "writeJson",
+                  cause: new Error(`unexpected non-auth write: ${filePath}`),
+                }),
+              ),
+      })
+    }),
+  ).pipe(Layer.provide(LayerNode.compile(FSUtil.node)))
 
   const redirectNode = makeGlobalNode({
     service: FSUtil.Service,
