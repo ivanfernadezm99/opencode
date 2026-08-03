@@ -85,11 +85,24 @@ function createGithubBackend(currentVersion: string): UpdaterBackend {
       })
     },
 
-    quitAndInstall() {
+    async quitAndInstall() {
       if (!downloadPath || !fs.existsSync(downloadPath)) {
         dialog.showErrorBox("Update Error", "Installer not found. Download manually from GitHub.")
         return
       }
+
+      // Give real feedback before closing: the user sees that an update is
+      // starting instead of a silent close + black screen. The PowerShell
+      // console stays visible during download/install (`windowsHide: false`),
+      // and install.ps1 -Desktop relaunches the app when done.
+      await dialog.showMessageBox({
+        type: "info",
+        message: "one info code is updating.\n\nThe installer will close this app, update it, and reopen it automatically.",
+        title: "one info code - Updating",
+        buttons: ["OK"],
+        defaultId: 0,
+        noLink: true,
+      })
 
       const psCommand = `powershell -ExecutionPolicy Bypass -File "${downloadPath}" -Desktop`
       exec(psCommand, { windowsHide: false }, (err) => {
@@ -99,7 +112,7 @@ function createGithubBackend(currentVersion: string): UpdaterBackend {
       })
 
       // Give PowerShell a moment to start, then quit the app so installer can replace files
-      setTimeout(() => app.quit(), 1000)
+      setTimeout(() => app.quit(), 2000)
     },
   }
 }

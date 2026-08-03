@@ -478,18 +478,13 @@ async function main() {
   }
 
   // ── Auto-comment (resumen descriptivo) ──
-  // Convención: todo comment empieza con "Soporte a proyecto IA: " (o variante existente "Soporte a proyecto de IA")
-  const COMMENT_PREFIX = 'Soporte a proyecto IA: ';
   for (const entry of ENTRIES) {
     if (!entry.comment) {
       const autoComment = generateAutoComment(entry.date);
       if (autoComment) {
-        entry.comment = `${COMMENT_PREFIX}${autoComment}`;
-        console.log(`  💬 Comment auto-generado: ${entry.comment.substring(0, 80)}${entry.comment.length > 80 ? '…' : ''}`);
+        entry.comment = autoComment;
+        console.log(`  💬 Comment auto-generado: ${autoComment.substring(0, 80)}${autoComment.length > 80 ? '…' : ''}`);
       }
-    } else if (!entry.comment.startsWith('Soporte a proyecto')) {
-      entry.comment = `${COMMENT_PREFIX}${entry.comment}`;
-      console.log(`  💬 Prefijo agregado a comment: ${entry.comment.substring(0, 80)}${entry.comment.length > 80 ? '…' : ''}`);
     }
   }
 

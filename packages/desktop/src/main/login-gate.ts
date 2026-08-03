@@ -603,6 +603,7 @@ export async function enforceDesktopLogin(serverUrl: string, serverPassword: str
 
 async function checkExistingAuth(): Promise<boolean> {
   try {
+    const logger = getLogger()
     const fs = await import("node:fs")
     // The auth module stores tokens at Global.Path.data/auth.json
     // which resolves to {XDG_DATA_HOME}/opencode/auth.json.
@@ -636,16 +637,29 @@ async function checkExistingAuth(): Promise<boolean> {
       // silently skipping the login gate would leave the user stuck.
       try {
         const config = resolveMicrosoftConfig()
-        const response = await fetch(`https://login.microsoftonline.com/${config.tenant}/oauth2/v2.0/token`, {
-          method: "POST",
-          headers: { "Content-Type": "application/x-www-form-urlencoded", Accept: "application/json" },
-          body: new URLSearchParams({
-            grant_type: "refresh_token",
-            client_id: config.clientId,
-            refresh_token: data.microsoft.refresh,
-            scope: config.scopes,
-          }).toString(),
-        })
+        logger.log("checkExistingAuth: validating refresh token", { authPath })
+        const controller = new AbortController()
+        const timeout = setTimeout(() => controller.abort(), 10_000)
+        let response
+        try {
+          response = await fetch(
+            `https://login.microsoftonline.com/${config.tenant}/oauth2/v2.0/token`,
+            {
+              method: "POST",
+              headers: { "Content-Type": "application/x-www-form-urlencoded", Accept: "application/json" },
+              body: new URLSearchParams({
+                grant_type: "refresh_token",
+                client_id: config.clientId,
+                refresh_token: data.microsoft.refresh,
+                scope: config.scopes,
+              }).toString(),
+              signal: controller.signal,
+            },
+          )
+        } finally {
+          clearTimeout(timeout)
+        }
+        logger.log("checkAuth: token validation response", { status: response.status })
         if (response.ok) {
           // Refresh succeeded — update stored tokens so we start with a fresh
           // access token and avoid an immediate refresh round-trip on first use.
@@ -658,8 +672,10 @@ async function checkExistingAuth(): Promise<boolean> {
         // Token rejected by Microsoft — try the next candidate path
         continue
       } catch {
-        // Network unavailable — be lenient, the token might work once the user
-        // is back online or the server-side refresh handles a transient outage.
+        // Network unavailable or request timed out — be lenient, the token might
+        // work once the user is back online or the server-side refresh handles a
+        // transient outage. Without this fallback a hung fetch (no timeout) would
+        // freeze the app before the main window is created.
         return true
       }
     }

@@ -1,10 +1,10 @@
 ---
 name: redmine-time-entries
-description: "Trigger: cargar horas, registrar horas, cargar tiempo, redmine horas, oneinfo horas. Automatiza la carga de horas en Redmine via Playwright usando datos de Engram. Convención: comentarios empiezan con 'Soporte a proyecto IA'."
+description: "Trigger: cargar horas, registrar horas, cargar tiempo, redmine horas, oneinfo horas. Automatiza la carga de horas en Redmine via Playwright usando datos de Engram."
 license: Apache-2.0
 metadata:
   author: "servidor"
-  version: "2.5"
+  version: "2.4"
 ---
 
 ## Activación
@@ -123,41 +123,6 @@ bun load-hours.js --date 2026-07-17,2026-07-17 \
 - Con múltiples proyectos, pasar `--entries` JSON en vez de `--date`.
 - El **comment se auto-genera** a partir de los commits del día si no se especifica. Arma un resumen descriptivo como `"skills: multi-project, credential flow | installer: tests, docs"`.
 - El **detail se auto-genera en español**: resumen del día + sección Engram + hashes de commits (sin subjects en inglés).
-
-## Convención de comentarios (obligatoria)
-
-**TODO comentario DEBE empezar con el prefijo `Soporte a proyecto IA: `** (o variante ya existente `Soporte a proyecto de IA`).
-
-- Al **cargar** horas nuevas: el comment auto-generado o manual debe empezar con `Soporte a proyecto IA: `.
-- Al **revisar** cargas existentes: si el comentario NO empieza con `Soporte a proyecto IA` (ni `Soporte a proyecto de IA`), corregirlo agregando el prefijo adelante. No tocar los que ya empiezan con el prefijo.
-- **NUNCA borrar y recargar** para corregir un comentario — se edita la entrada existente en su página de edición.
-
-### Modificar comentarios existentes (sin borrar)
-
-Usá `prepend-comment.js` para agregar el prefijo adelante en entradas existentes (edita en el formulario, no borra):
-
-```bash
-# Agregar prefijo a entradas que no lo tienen
-node prepend-comment.js --ids 104186,104182,104179 --prefix "Soporte a proyecto IA: "
-
-# Con prefijo por defecto (Soporte a proyecto IA: )
-node prepend-comment.js --ids 12345,12346
-
-# Listar primero para ver qué IDs necesitan el prefijo
-node redmine-entries.js --list --days 31
-```
-
-Flags de `prepend-comment.js`:
-
-| Flag | Descripción | Default |
-|------|-------------|---------|
-| `--ids` | IDs de entradas a revisar (separados por coma) | — |
-| `--prefix` | Prefijo a anteponer | `Soporte a proyecto IA: ` |
-
-Comportamiento:
-- Si el comentario ya empieza con el prefijo → lo salta (sin cambios)
-- Si no → antepone el prefijo y guarda el formulario
-- Las credenciales se leen internamente de `.credentials` (nunca por chat/bash)
 
 ## Archivos de configuración
 
