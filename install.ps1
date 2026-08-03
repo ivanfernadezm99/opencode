@@ -33,6 +33,7 @@ try { [Console]::OutputEncoding = [System.Text.Encoding]::UTF8 } catch {}
 
 $OPENCODE_REPO = "ivanfernadezm99/opencode"
 $GENTLE_REPO = "Gentleman-Programming/gentle-ai"
+$ENGRAM_REPO = "Gentleman-Programming/engram"
 $BINARY_NAME = "opencode"
 $GENTLE_NAME = "gentle-ai"
 
@@ -598,6 +599,32 @@ function Main {
         Write-Success "gentle-ai already at latest version ($gentleVersion), skipping."
     } else {
         Install-Binary -Repo $GENTLE_REPO -OutputDir $GENTLE_DIR -AssetName "gentle-ai" -BinaryName "gentle-ai" -Version $gentleVersion
+    }
+
+    Write-Step "Installing engram"
+    # engram lives in its own repo (Gentleman-Programming/engram) as a separate
+    # binary. The MCP manifest ({{GENTLE_BIN}}/engram.exe mcp --tools=agent)
+    # depends on it, but it was never installed by this script — on client
+    # machines engram.exe did not exist, so the engram MCP server stayed "failed".
+    # Install it into GENTLE_DIR so `engram mcp` (a short-lived stdio subprocess
+    # launched by opencode) resolves; the engram HTTP server (`engram serve`,
+    # port 7437) is only needed by the session-tracking plugin and auto-starts.
+    $engramLatest = Get-LatestVersion -Repo $ENGRAM_REPO
+    if (-not $engramLatest) {
+        Write-Warn "Cannot reach GitHub for engram. Using a known version..."
+        $engramVersion = "v1.20.0"
+    } else {
+        $engramVersion = Get-WindowsVersion -Repo $ENGRAM_REPO -BinaryName "engram" -LatestVersion $engramLatest
+        if (-not $engramVersion) {
+            Write-Warn "No Windows build found for engram. Using a known version..."
+            $engramVersion = "v1.20.0"
+        }
+    }
+    $engramInstalled = $engramVersion -and (Get-InstalledVersion -BinaryPath (Join-Path $GENTLE_DIR "engram.exe")) -eq $engramVersion
+    if ($engramInstalled) {
+        Write-Success "engram already at latest version ($engramVersion), skipping."
+    } else {
+        Install-Binary -Repo $ENGRAM_REPO -OutputDir $GENTLE_DIR -AssetName "engram" -BinaryName "engram" -Version $engramVersion
     }
 
     Write-Step "Setting up PATH"
