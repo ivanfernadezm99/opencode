@@ -219,3 +219,37 @@ Neither `.bat` ships the `.ps1` in the repository. They always download it on
 first run, ensuring the user always gets the latest installer logic without
 needing to update the batch file. On subsequent runs the cached `.ps1` is used
 unless deleted.
+
+---
+
+## 8. Personal policy vs. distribution boundary (IMPORTANT)
+
+**Everything under `.opencode/skills/*` in the GitHub repo is distributed to every
+client** that runs this installer. The installer does a sparse checkout of
+`.opencode/skills/*` + `.opencode/scripts/*` and copies each skill into
+`~/.config/opencode/skills` on the client machine (see "Installing project
+skills" phase).
+
+### Rule: keep Iván's personal policies OUT of the repo
+
+Personal preferences that only apply to Iván (owner) must not be baked into
+skills that ship to clients:
+
+- ✅ **Belongs in the installer/repo**: the `redmine-time-entries` skill body —
+  the company will load hours this way, so the workflow must be distributed.
+- ❌ **Does NOT belong in the installer**: the "Soporte a proyecto IA: "
+  comment-prefix convention. That prefix is a **personal policy of Iván**. It
+  is NOT a company requirement for loading hours. Forcing it in the skill
+  (introduced by commit `8bd1be4df`) made every client's Redmine comments use
+  the prefix automatically, which was wrong.
+
+### Lesson applied
+
+- Separate the owner's personal config (Engram-backed, per-user) from what the
+  installer distributes to clients.
+- If a convention in a skill is really personal, keep it configured per-user
+  (e.g. via Engram / per-user config), never hardcoded as a mandatory rule in a
+  distributed skill.
+- Re-examine any commit that hardcodes a "must / always / prefix" convention in
+  a shipped skill — confirm with the owner whether it is company policy before
+  keeping it in the repo.
