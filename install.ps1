@@ -1056,10 +1056,13 @@ function Main {
     if ($Desktop) {
         Write-Step "Installing desktop app"
 
-        # Kill any existing desktop app processes to avoid "file in use" errors
+        # Kill any existing desktop app processes to avoid "file in use" errors.
+        # Match both the current product exe and legacy names so an updated
+        # installer can always replace the running app.
         Write-Info "Stopping existing desktop app..."
-        taskkill /f /fi "IMAGENAME eq @opencode-aidesktop.exe" 2>$null | Out-Null
-        taskkill /f /fi "IMAGENAME eq opencode.exe" 2>$null | Out-Null
+        foreach ($procName in @("one info code.exe", "@opencode-aidesktop.exe", "OpenCode Dev.exe", "opencode.exe")) {
+            taskkill /f /fi "IMAGENAME eq $procName" 2>$null | Out-Null
+        }
         Start-Sleep -Seconds 2
 
         # Clean stale lockfile that prevents app from starting
@@ -1132,6 +1135,34 @@ function Main {
         } else {
             Write-Warn "Could not download desktop app installer"
             Write-Info "Download it manually from: https://github.com/$OPENCODE_REPO/releases/tag/$Version"
+        }
+
+        # Relaunch the desktop app after a successful install so the update
+        # feels seamless (the app closed itself to allow file replacement).
+        $launched = $false
+        $installedExe = Get-ChildItem -Path (Join-Path $env:LOCALAPPDATA "Programs") -Filter "one info code.exe" -Recurse -ErrorAction SilentlyContinue |
+            Where-Object { $_.FullName -notmatch "Uninstall" } |
+            Sort-Object LastWriteTime -Descending |
+            Select-Object -First 1
+        if (-not $installedExe) {
+            $uninstallKey = Get-ItemProperty "HKCU:\Software\Microsoft\Windows\CurrentVersion\Uninstall\*" -ErrorAction SilentlyContinue |
+                Where-Object { $_.DisplayName -match "one info code" } |
+                Select-Object -First 1
+            if ($uninstallKey.DisplayIcon -and (Test-Path $uninstallKey.DisplayIcon)) {
+                $installedExe = Get-Item $uninstallKey.DisplayIcon
+            }
+        }
+        if ($installedExe) {
+            try {
+                Start-Process -FilePath $installedExe.FullName
+                Write-Success "Desktop app relaunched: $($installedExe.FullName)"
+                $launched = $true
+            } catch {
+                Write-Warn "Could not relaunch desktop app: $_"
+            }
+        }
+        if (-not $launched) {
+            Write-Info "Desktop app installed. Open it from the Start Menu (one info code)."
         }
     }
 
