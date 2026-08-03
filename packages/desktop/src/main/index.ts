@@ -419,7 +419,11 @@ const main = Effect.gen(function* () {
 
   yield* Fiber.await(loadingTask)
 
-  yield* Effect.promise(() => enforceDesktopLogin(url, password))
+  const ready = yield* Deferred.await(serverReady)
+  const { url, password } = ready as ServerReadyData
+  if (password !== null) {
+    yield* Effect.promise(() => enforceDesktopLogin(url, password))
+  }
 
   const windows = restoreMainWindows()
   if (windows.length) {
