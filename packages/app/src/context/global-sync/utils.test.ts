@@ -43,7 +43,7 @@ describe("normalizeAgentList", () => {
   })
 
   test("rejects plain name-only objects that are not agents", () => {
-    const result = normalizeAgentList([{ name: "not-an-agent" }] as unknown[])
+    const result = normalizeAgentList([{ name: "not-an-agent" }] as unknown)
     expect(result).toEqual([])
   })
 })

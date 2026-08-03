@@ -23,6 +23,7 @@ function isAgent(value: unknown): value is Agent {
 }
 
 export function normalizeAgentList(input: AgentListOutput["data"] | Agent[]): Agent[]
+export function normalizeAgentList(input: unknown): Agent[]
 export function normalizeAgentList(input: unknown): Agent[] {
   if (Array.isArray(input)) {
     if (input.length === 0) return []
