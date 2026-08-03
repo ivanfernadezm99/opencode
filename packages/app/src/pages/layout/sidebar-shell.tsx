@@ -11,6 +11,7 @@ import { ConstrainDragXAxis } from "@/utils/solid-dnd"
 import { IconButton } from "@opencode-ai/ui/icon-button"
 import { Tooltip, TooltipKeybind } from "@opencode-ai/ui/tooltip"
 import { type LocalProject } from "@/context/layout"
+import { type DesktopUser, useDesktopUser, userInitials } from "./sidebar-user"
 
 export const SidebarContent = (props: {
   mobile?: boolean
@@ -35,6 +36,16 @@ export const SidebarContent = (props: {
   const expanded = createMemo(() => !!props.mobile || props.opened())
   const placement = () => (props.mobile ? "bottom" : "right")
   let panel: HTMLDivElement | undefined
+  const { user: desktopUser } = useDesktopUser()
+
+  const userTooltip = (user: DesktopUser) => (
+    <div class="flex flex-col gap-0.5">
+      <Show when={user.displayName}>
+        <span class="text-text-strong font-medium">{user.displayName}</span>
+      </Show>
+      <span class="text-text-weak text-12-medium">{user.email}</span>
+    </div>
+  )
 
   createEffect(() => {
     const el = panel
@@ -108,6 +119,19 @@ export const SidebarContent = (props: {
               aria-label={props.helpLabel()}
             />
           </Tooltip>
+          <Show when={desktopUser()}>
+            {(user) => (
+              <Tooltip placement={placement()} value={userTooltip(user())}>
+                <button
+                  type="button"
+                  aria-label={user().email}
+                  class="size-8 shrink-0 rounded-full border border-border-weak-base bg-surface-info-base text-text-base text-12-medium uppercase"
+                >
+                  {userInitials(user().displayName ?? user().email)}
+                </button>
+              </Tooltip>
+            )}
+          </Show>
         </div>
       </div>
 
