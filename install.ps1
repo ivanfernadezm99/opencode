@@ -681,14 +681,8 @@ function Main {
     $tempDir = Join-Path $env:TEMP "opencode-skills-$(Get-Random)"
     $shouldInstall = $true
 
-    # Check if skills already installed with the current opencode version
-    if ((Test-Path $skillsStampFile) -and $Version) {
-        $installedVersion = (Get-Content $skillsStampFile -Raw).Trim()
-        if ($installedVersion -eq $Version) {
-            Write-Info "Skills already up to date (version $Version), skipping."
-            $shouldInstall = $false
-        }
-    }
+    # Always reinstall skills — sparse checkout is fast and clients need the
+    # latest skills even when the opencode version hasn't changed.
 
     if ($shouldInstall) {
         try {
