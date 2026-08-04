@@ -25,6 +25,37 @@ Valid types are `feat`, `fix`, `docs`, `chore`, `refactor`, and `test`. Scopes a
 
 Examples: `fix(tui): simplify thinking toggle styling`, `docs: update contributing guide`, `chore(sdk): regenerate types`.
 
+## Known Critical Bugs
+
+### install.ps1 wipes user sessions on update (v1.18.12, 2026-08-04)
+
+**Status**: OPEN — root cause investigation pending on Windows machine.
+
+**Symptom**: Running `install.ps1` to update from v1.18.11 to v1.18.12 caused ALL previous user sessions (Engram persistent memory) to disappear. User lost all conversation history and progress from prior sessions.
+
+**Where data lives on Windows**:
+- Engram DB: `%USERPROFILE%\.engram\engram.db` (backed up by install.ps1 line 637-645, original NOT deleted)
+- OpenCode sessions DB: `Global.Path.data + /opencode.db` (via xdg-basedir, resolves to `os.homedir()/.local/share/opencode/opencode.db` on Windows)
+- Desktop app config: `%APPDATA%\ai.opencode.desktop.dev\config\opencode\` (copied from `~\.config\opencode\*` by install.ps1 line 698)
+
+**What install.ps1 does that could affect data**:
+1. Line 698: `Copy-Item -Path "$globalConfig\*" -Destination $desktopConfig -Recurse -Force` — copies `~\.config\opencode\*` to desktop app config dir. This OVERWRITES existing files (Force flag) but does not delete files missing from source.
+2. Line 742-743: Deletes each skill dir before copying new version — expected behavior, only affects `.config\opencode\skills\`.
+3. Line 857: Resolves `{{GENTLE_BIN}}` to engram.exe path in MCP config — overwrites opencode.json MCP section.
+4. Line 627: Replaces engram.exe binary — could cause schema/location changes in new engram version.
+
+**Most likely cause**: The engram.exe binary update (v1.20.0) may change DB format or location, or the MCP config rewrite at line 866 (`$config.mcp | Add-Member`) may corrupt the opencode.json, causing opencode to not find sessions on next launch.
+
+**Action required**: Investigate on Windows machine (DESKTOP-OAPB9PB) what files exist in `%USERPROFILE%\.engram\` and `~/.local/share/opencode/` after the update. Check if engram.db was moved/corrupted. Check if opencode.json MCP section was rewritten incorrectly.
+
+**Fix needed**: install.ps1 must NEVER delete or overwrite user session data. The installer should:
+- Back up `%USERPROFILE%\.engram\engram.db` before ANY operation (already does this, but verify it's not overwritten after)
+- Never touch `opencode.db` or session-related SQLite files
+- Merge opencode.json MCP config instead of overwriting (already does skip-if-exists, but verify)
+- Test that engram.exe binary update doesn't lose existing observations
+
+---
+
 ## Style Guide
 
 ### General Principles

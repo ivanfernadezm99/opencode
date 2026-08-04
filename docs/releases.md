@@ -111,6 +111,16 @@ Usuario ejecuta install.bat (doble-click)
 
 ---
 
+## ⚠️ Known Issues
+
+### Session data loss on update (v1.18.12, OPEN)
+
+**DO NOT release a new version until this is fixed.** Running `install.ps1` to update from v1.18.11 to v1.18.12 caused ALL previous user sessions (Engram persistent memory) to disappear on the Windows machine. See `AGENTS.md` → "Known Critical Bugs" for full investigation details. Root cause pending.
+
+**Until fixed**: users should NOT run `install.ps1` to update. Backup `%USERPROFILE%\.engram\engram.db` and `~/.local/share/opencode/opencode.db` before any installer run.
+
+---
+
 ## Version History
 
 | Versión | Cambio |
