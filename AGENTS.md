@@ -27,32 +27,25 @@ Examples: `fix(tui): simplify thinking toggle styling`, `docs: update contributi
 
 ## Known Critical Bugs
 
-### install.ps1 wipes user sessions on update (v1.18.12, 2026-08-04)
+### install.ps1 "wipes" user sessions on update (v1.18.12, 2026-08-04)
 
-**Status**: OPEN — root cause investigation pending on Windows machine.
+**Status**: RESOLVED — root cause was a channel-switch DB, not data deletion.
 
-**Symptom**: Running `install.ps1` to update from v1.18.11 to v1.18.12 caused ALL previous user sessions (Engram persistent memory) to disappear. User lost all conversation history and progress from prior sessions.
+**Symptom**: Running `install.ps1` to update from v1.18.11 to v1.18.12 caused ALL previous user sessions to appear missing.
+
+**Actual root cause**: OpenCode names its session DB after the build channel (`packages/core/src/database/database.ts` → `opencode-<channel>.db`, or `opencode.db` for stable channels). The fork builds from feature branches (`git branch --show-current` is the channel via `packages/script/src/index.ts`), so a client updating from one fork build to another (e.g. `dev` -> `dev-fork-snapshot`) gets a brand-new empty DB while the old sessions stay intact in the previous channel's DB. On the Windows machine: the user's 2 real sessions lived in `opencode-dev.db` (2.5 MB), while the new `opencode-dev-fork-snapshot.db` (+ `.db-wal`) started empty. Nothing was deleted; engram was never the victim (its Windows DB was already empty schema-only at 229 KB before the update, all 43 backups identical).
+
+**Fix**: `install.ps1` gained `Migrate-SessionDatabase`, which derives the new build's channel from the freshly installed binary (`opencode --version`, bounded 15s probe, release-tag fallback) and copies the newest existing session DB (`opencode-*.db` / `opencode.db`, measured with `-wal`/`-shm` sidecars) into the new channel's DB **only when that destination is empty** (absent or 0 bytes) — an existing DB of any size is never overwritten. It runs once, right after the opencode binary install and before the first invocation of the new binary (default cron setup), covering both `-Desktop` and CLI-only installs. Stale `-wal`/`-shm` are removed after the copy so a foreign WAL cannot replay against the migrated DB.
 
 **Where data lives on Windows**:
-- Engram DB: `%USERPROFILE%\.engram\engram.db` (backed up by install.ps1 line 637-645, original NOT deleted)
-- OpenCode sessions DB: `Global.Path.data + /opencode.db` (via xdg-basedir, resolves to `os.homedir()/.local/share/opencode/opencode.db` on Windows)
-- Desktop app config: `%APPDATA%\ai.opencode.desktop.dev\config\opencode\` (copied from `~\.config\opencode\*` by install.ps1 line 698)
+- Engram DB: `%USERPROFILE%\.engram\engram.db` (backed up by install.ps1, original NOT deleted)
+- OpenCode sessions DB: `Global.Path.data + /opencode-<channel>.db` (via xdg-basedir, resolves to `os.homedir()/.local/share/opencode/opencode-<channel>.db` on Windows; `opencode.db` for stable channels)
+- Desktop app config: `%APPDATA%\ai.opencode.desktop.dev\config\opencode\` (copied from `~\.config\opencode\*` by install.ps1)
 
-**What install.ps1 does that could affect data**:
-1. Line 698: `Copy-Item -Path "$globalConfig\*" -Destination $desktopConfig -Recurse -Force` — copies `~\.config\opencode\*` to desktop app config dir. This OVERWRITES existing files (Force flag) but does not delete files missing from source.
-2. Line 742-743: Deletes each skill dir before copying new version — expected behavior, only affects `.config\opencode\skills\`.
-3. Line 857: Resolves `{{GENTLE_BIN}}` to engram.exe path in MCP config — overwrites opencode.json MCP section.
-4. Line 627: Replaces engram.exe binary — could cause schema/location changes in new engram version.
-
-**Most likely cause**: The engram.exe binary update (v1.20.0) may change DB format or location, or the MCP config rewrite at line 866 (`$config.mcp | Add-Member`) may corrupt the opencode.json, causing opencode to not find sessions on next launch.
-
-**Action required**: Investigate on Windows machine (DESKTOP-OAPB9PB) what files exist in `%USERPROFILE%\.engram\` and `~/.local/share/opencode/` after the update. Check if engram.db was moved/corrupted. Check if opencode.json MCP section was rewritten incorrectly.
-
-**Fix needed**: install.ps1 must NEVER delete or overwrite user session data. The installer should:
-- Back up `%USERPROFILE%\.engram\engram.db` before ANY operation (already does this, but verify it's not overwritten after)
-- Never touch `opencode.db` or session-related SQLite files
-- Merge opencode.json MCP config instead of overwriting (already does skip-if-exists, but verify)
-- Test that engram.exe binary update doesn't lose existing observations
+**Prevention notes**:
+- `install.ps1` backs up `%USERPROFILE%\.engram\engram.db` AND every session DB (`opencode-*.db` / `opencode.db`, with `-wal`/`-shm`) to `*.backup-<timestamp>` BEFORE replacing any binary, and never deletes the originals. The post-install engram backup step adds a second snapshot. A failed backup warns and continues rather than aborting the update.
+- The fork's channel name comes from `git branch --show-current` at build time; keep fork releases on a stable channel (or rely on `Migrate-SessionDatabase`) to avoid session-DB switches for clients.
+- Never delete `opencode-*.db` / `opencode.db` files — they hold the user's conversations. Recovery after a botched update: rename the newest `opencode-*.db.backup-*` back to `opencode-<channel>.db` (remove a stale `-wal`/`-shm` first), and restore `engram.db.backup-*` the same way.
 
 ---
 

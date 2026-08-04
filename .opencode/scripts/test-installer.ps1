@@ -129,7 +129,8 @@ $requiredFunctions = @(
     "function Get-LatestVersion", "function Get-InstalledVersion",
     "function Install-Binary", "function Add-ToUserPath",
     "function Download-WithRetry", "function Clear-OrphanedShortcuts",
-    "function Test-Property", "function Get-Property"
+    "function Test-Property", "function Get-Property",
+    "function Migrate-SessionDatabase"
 )
 foreach ($func in $requiredFunctions) {
     if ($content -match "function $($func -replace '^function ','')") {
@@ -138,6 +139,22 @@ foreach ($func in $requiredFunctions) {
         Test-Fail "Function '$func' not found"
     }
 }
+
+# Migrate-SessionDatabase must be invoked exactly once, right after the
+# opencode binary install, with the freshly installed binary as its source of
+# truth for the channel name.
+if ($content -match 'Migrate-SessionDatabase -Version \$Version -BinaryPath \$opencodeExe') {
+    Test-Pass "Migrate-SessionDatabase called once with freshly installed binary"
+} else {
+    Test-Fail "Migrate-SessionDatabase callsite missing or malformed"
+}
+$migrateCallCount = ([regex]::Matches($content, 'Migrate-SessionDatabase -Version')).Count
+if ($migrateCallCount -eq 1) { Test-Pass "Exactly one Migrate-SessionDatabase callsite ($migrateCallCount)" }
+else { Test-Fail "Expected exactly one Migrate-SessionDatabase callsite, found $migrateCallCount" }
+
+# Pre-update data backup must exist and cover both session DBs and engram DB.
+if ($content -match 'Backing up session and engram databases') { Test-Pass "Pre-update backup step present" }
+else { Test-Fail "Pre-update backup step missing" }
 
 # ----- [6] Error handling -----
 Write-Host "--- [6] Error handling ---" -ForegroundColor White

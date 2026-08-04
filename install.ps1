@@ -308,7 +308,8 @@ function Install-Binary {
         [string]$BinaryName,
         [bool]$NeedsExtract = $true,
         [string]$MirrorUrl = "",
-        [string]$Version = ""
+        [string]$Version = "",
+        [switch]$ContinueOnError
     )
 
     $arch = Get-Arch
@@ -349,11 +350,13 @@ function Install-Binary {
         }
 
         if (-not $ok) {
+            if ($ContinueOnError) { throw "Failed to download $archiveName after all attempts." }
             Stop-WithError "Failed to download $archiveName after all attempts."
         }
 
         $fileSize = (Get-Item $archivePath).Length
         if ($fileSize -lt 1000) {
+            if ($ContinueOnError) { throw "Downloaded file is suspiciously small (${fileSize} bytes)." }
             Stop-WithError "Downloaded file is suspiciously small (${fileSize} bytes)."
         }
         Write-Success "Downloaded ($([math]::Round($fileSize / 1MB, 1)) MB)"
@@ -369,6 +372,7 @@ function Install-Binary {
         if (-not (Test-Path $binaryPath)) {
             $binaryPath = Join-Path $tmpDir "$BinaryName.exe"
             if (-not (Test-Path $binaryPath)) {
+                if ($ContinueOnError) { throw "Binary '$BinaryName.exe' not found in archive" }
                 Stop-WithError "Binary '$BinaryName.exe' not found in archive"
             }
         }
@@ -464,6 +468,172 @@ function Clear-OrphanedShortcuts {
 }
 
 # --- Main -------------------------------------------------------------------
+
+# --- Session DB migration ----------------------------------------------------
+# opencode names its session database after the installation channel that was
+# baked into the binary at build time (packages/core/src/database/database.ts):
+#   stable channels (latest/beta/prod) -> <data>/opencode.db
+#   preview channels                 -> <data>/opencode-<channel>.db
+# The fork builds from feature branches, so a client updating from one fork
+# build to another can switch channels (e.g. dev -> dev-fork-snapshot). The new
+# channel starts with an empty DB and all previous sessions appear "lost" even
+# though they are intact in the previous channel's DB. Before relaunching, copy
+# the newest existing session DB over the DB this build is about to use.
+function Migrate-SessionDatabase {
+    param(
+        [string]$Version,
+        [string]$BinaryPath = ""
+    )
+
+    # This runs during install with $ErrorActionPreference = Stop at script
+    # level; any failure here must never abort the whole installer.
+    $destPath = ""
+    $destName = ""
+    $swapStarted = $false
+    try {
+        $dataDir = Join-Path $env:USERPROFILE ".local\share\opencode"
+        if (-not (Test-Path $dataDir)) {
+            Write-Info "No session data directory yet ($dataDir) -- nothing to migrate."
+            return
+        }
+
+        # Derive the channel this build will use. The channel is baked into the
+        # binary at build time and is the most reliable source: `opencode
+        # --version` prints 0.0.0-<channel>-<timestamp> for preview builds, or a
+        # plain semver for stable builds (which use opencode.db). The release tag
+        # is a fallback when the binary cannot be executed. Both patterns anchor
+        # the channel capture to the FINAL -<12-14 digits> segment so a channel
+        # that itself contains digit groups (e.g. dev-202608041234-foo) is not
+        # truncated.
+        $channel = ""
+        if ($BinaryPath -and (Test-Path $BinaryPath)) {
+            # Probe the binary for its baked-in channel, BOUNDED: a first-run
+            # AV scan or a hung build must not stall the installer, and a probe
+            # that emits nothing must fall through to the version-tag fallback
+            # instead of throwing.
+            $binVer = ""
+            $outFile = Join-Path $env:TEMP "opencode-version-probe-$PID.out"
+            $errFile = Join-Path $env:TEMP "opencode-version-probe-$PID.err"
+            try {
+                $probe = Start-Process -FilePath $BinaryPath -ArgumentList "--version" -NoNewWindow -PassThru -RedirectStandardOutput $outFile -RedirectStandardError $errFile -ErrorAction SilentlyContinue
+                if (-not $probe.WaitForExit(15000)) {
+                    $probe.Kill()
+                    Write-Warn "opencode --version probe timed out after 15s; falling back to release tag."
+                }
+                # Ensure the redirected handles are released so the temp files
+                # can be removed reliably.
+                $null = $probe.WaitForExit()
+                $probe.Dispose()
+                if (Test-Path $outFile) { $binVer = (Get-Content $outFile -Raw).Trim() }
+            } catch {
+                $binVer = ""
+            } finally {
+                Remove-Item -Path $outFile, $errFile -Force -ErrorAction SilentlyContinue
+            }
+            if ($binVer -match '^0\.0\.0-([A-Za-z0-9._-]+?)-(\d{12,14})$') { $channel = $matches[1] }
+        }
+        if (-not $channel -and $Version -match '^v?0\.0\.0-([A-Za-z0-9._-]+?)-(\d{12,14})$') { $channel = $matches[1] }
+        if ($channel) {
+            $destName = if ($channel -notin @("latest", "beta", "prod")) { "opencode-$channel.db" } else { "opencode.db" }
+        } elseif ($Version -match '^v?\d+\.\d+\.\d+$') {
+            # Stable release: the app always uses opencode.db.
+            $destName = "opencode.db"
+        } else {
+            # No channel derivable (detached-HEAD build, unexecutable binary,
+            # unknown version format). Migrating to a guessed name could copy
+            # sessions to a DB the app never reads, so warn and skip.
+            Write-Warn "Session DB migration skipped: could not determine channel from binary '$BinaryPath' or version '$Version'."
+            return
+        }
+        # The app also honors an env override that forces opencode.db even for
+        # preview channels; mirror its exact semantics (only "1" or "true",
+        # case-sensitive) so we never write to a DB the app ignores.
+        if ($env:OPENCODE_DISABLE_CHANNEL_DB -ceq "1" -or $env:OPENCODE_DISABLE_CHANNEL_DB -ceq "true") {
+            $destName = "opencode.db"
+        }
+        $destPath = Join-Path $dataDir $destName
+
+        # Measure the destination including sidecars: an un-checkpointed WAL can
+        # hold sessions the main DB file size alone would miss. We only ever
+        # migrate into an EMPTY destination: an existing DB (any size) belongs to
+        # the channel the user is already using and must never be overwritten,
+        # even when it is small (a few short chats can sit under 512KB).
+        $destTotal = 0
+        foreach ($suffix in @("", "-wal", "-shm")) {
+            $p = "$destPath$suffix"
+            if (Test-Path $p) { $destTotal += (Get-Item $p).Length }
+        }
+
+        # Find candidate sources BEFORE the guard so skip messages can point at
+        # the surviving source. Measure each candidate including sidecars: after
+        # the process stop, a heavy session's data can live in a large WAL with
+        # a small main file.
+        $allCandidates = @(Get-ChildItem -Path $dataDir -Filter "opencode*.db" -ErrorAction SilentlyContinue |
+            Where-Object { $_.Name -notlike "$destName*" -and $_.Name -notmatch '\.backup-' })
+        $candidateList = @()
+        foreach ($c in $allCandidates) {
+            $cSize = $c.Length
+            foreach ($suffix in @("-wal", "-shm")) {
+                $sp = "$($c.FullName)$suffix"
+                if (Test-Path $sp) { $cSize += (Get-Item $sp).Length }
+            }
+            $candidateList += [pscustomobject]@{ File = $c; SizeWithSidecars = $cSize }
+        }
+        $candidates = @($candidateList | Where-Object { $_.SizeWithSidecars -gt 300KB } |
+            Sort-Object @{ Expression = { $_.File.LastWriteTime }; Descending = $true }, @{ Expression = { $_.File.Name } })
+        $source = if ($candidates.Count -gt 0) { $candidates[0].File } else { $null }
+
+        if ($destTotal -gt 0) {
+            $hint = if ($source) { "Your previous sessions remain intact in $($source.Name) in $dataDir." } else { "Your previous sessions remain intact in the other channel DB(s) in $dataDir." }
+            if ($destTotal -le 512KB) {
+                Write-Warn "$destName already exists ($destTotal bytes) -- skipping migration to avoid overwriting it. If it is empty or a partial from an interrupted migration, delete $destName (plus its -wal/-shm files) and re-run to migrate your sessions. $hint"
+            } else {
+                Write-Info "$destName already holds sessions ($destTotal bytes incl. sidecars) -- skipping migration. If it was left by an interrupted migration, delete $destName (plus its -wal/-shm files) and re-run. $hint"
+            }
+            return
+        }
+
+        if (-not $source) {
+            if ($allCandidates) {
+                Write-Warn "Found session DB(s) below the migration threshold ($($allCandidates.Name -join ', ')) -- not migrated. If sessions appear missing, check those files."
+            } else {
+                Write-Info "No previous session DB to migrate."
+            }
+            return
+        }
+
+        # Swap: copy the source DB, then the source sidecars, then remove any
+        # destination sidecar the source did not provide (a stale WAL from a
+        # previous channel must never replay against the newly copied DB).
+        $swapStarted = $true
+        Copy-Item -Path $source.FullName -Destination $destPath -Force
+        foreach ($suffix in @("-wal", "-shm")) {
+            $srcSidecar = "$($source.FullName)$suffix"
+            if (Test-Path $srcSidecar) {
+                Copy-Item -Path $srcSidecar -Destination "$destPath$suffix" -Force
+            } else {
+                Remove-Item -Path "$destPath$suffix" -Force -ErrorAction SilentlyContinue
+            }
+        }
+        Write-Success "Migrated sessions from $($source.Name) -> $destName"
+    } catch {
+        Write-Warn "Session DB migration failed (continuing install): $($_.Exception.Message)"
+        # The destination was empty before the swap, so the only thing to undo is
+        # a partial copy. Keep this failure-isolated: a rollback error must never
+        # abort the installer.
+        try {
+            if ($swapStarted) {
+                foreach ($suffix in @("", "-wal", "-shm")) {
+                    Remove-Item -Path "$destPath$suffix" -Force -ErrorAction SilentlyContinue
+                }
+                Write-Warn "Removed partial $destName after failed migration."
+            }
+            # If the swap never started, the destination was never touched.
+        } catch {
+            Write-Warn "Session DB rollback also failed (leaving install as-is): $($_.Exception.Message)"
+        }
+    }
+}
 
 function Main {
     [CmdletBinding()]
@@ -563,6 +733,71 @@ function Main {
     }
     Write-Success "git, node, npm -- all present"
 
+    # Stop any running opencode processes BEFORE replacing the binary and
+    # migrating session data: a running app locks opencode.exe (file-in-use
+    # on replace) and keeps writing to its session DB (a live-WAL copy can
+    # tear). Also gracefully stop the engram HTTP server (port 7437) so it
+    # flushes mid-write state instead of being force-killed.
+    Write-Info "Stopping running opencode processes..."
+    foreach ($procName in @("one info code.exe", "@opencode-aidesktop.exe", "OpenCode Dev.exe", "opencode.exe")) {
+        taskkill /f /fi "IMAGENAME eq $procName" 2>$null | Out-Null
+    }
+    Start-Sleep -Seconds 2
+    Write-Info "Stopping engram server gracefully..."
+    try {
+        Invoke-RestMethod -Uri "http://127.0.0.1:7437/shutdown" -Method Post -TimeoutSec 3 -ErrorAction SilentlyContinue
+    } catch {}
+    # Give the server a moment to flush, then force-kill if it is still up so
+    # the binary can be replaced without a file-in-use failure.
+    Start-Sleep -Seconds 2
+    if (Get-Process -Name "engram" -ErrorAction SilentlyContinue) {
+        taskkill /f /fi "IMAGENAME eq engram.exe" 2>$null | Out-Null
+        Start-Sleep -Seconds 1
+    }
+
+    # Back up ALL user data BEFORE replacing anything, just in case: every
+    # session DB (opencode-*.db across all channels, with -wal/-shm sidecars)
+    # and the engram persistent-memory DB. The installer never deletes these
+    # files and the migration below only copies into an empty destination, but
+    # a pre-update snapshot means a botched update can always be rolled back
+    # by hand. Best-effort: a backup failure warns and continues rather than
+    # aborting the install.
+    Write-Step "Backing up session and engram databases"
+    $backupStamp = Get-Date -Format 'yyyyMMdd-HHmmss'
+    $backupCount = 0
+    try {
+        $sessionDataDir = Join-Path $env:USERPROFILE ".local\share\opencode"
+        if (Test-Path $sessionDataDir) {
+            foreach ($sdb in @(Get-ChildItem -Path $sessionDataDir -Filter "opencode*.db" -File -ErrorAction SilentlyContinue)) {
+                foreach ($suffix in @("", "-wal", "-shm")) {
+                    $sp = "$($sdb.FullName)$suffix"
+                    if (Test-Path $sp) {
+                        Copy-Item -Path $sp -Destination "$sp.backup-$backupStamp" -Force -ErrorAction SilentlyContinue
+                        if (Test-Path "$sp.backup-$backupStamp") { $backupCount++ }
+                    }
+                }
+            }
+        }
+        $engramDbDir = Join-Path $env:USERPROFILE ".engram"
+        $engramDbPath = Join-Path $engramDbDir "engram.db"
+        if (Test-Path $engramDbPath) {
+            foreach ($suffix in @("", "-wal", "-shm")) {
+                $ep = "$engramDbPath$suffix"
+                if (Test-Path $ep) {
+                    Copy-Item -Path $ep -Destination "$ep.backup-$backupStamp" -Force -ErrorAction SilentlyContinue
+                    if (Test-Path "$ep.backup-$backupStamp") { $backupCount++ }
+                }
+            }
+        }
+        if ($backupCount -gt 0) {
+            Write-Success "Backed up $backupCount session/engram file(s) -> *.backup-$backupStamp"
+        } else {
+            Write-Info "No existing session/engram databases to back up (fresh install)."
+        }
+    } catch {
+        Write-Warn "Pre-update data backup failed (continuing install): $($_.Exception.Message)"
+    }
+
     Write-Step "Installing opencode-fork"
     $opencodeInstalled = $Version -and (Get-InstalledVersion -BinaryPath (Join-Path $OPENCODE_DIR "opencode.exe")) -eq $Version
     if ($opencodeInstalled) {
@@ -582,6 +817,16 @@ function Main {
         Install-Binary @installParams
     }
 
+    # Migrate session history from a previous channel's DB so an update never
+    # looks like it erased the user's conversations. Must run BEFORE the new
+    # binary is first invoked (default cron setup below), otherwise the new
+    # channel's DB would be created and its fresh cron rows clobbered by the
+    # migration. The CLI binary's baked-in channel is authoritative for the DB
+    # name; the desktop exe is bundled with a fixed channel (dev), so desktop
+    # sessions never switch channels and need no migration here.
+    $opencodeExe = Join-Path $OPENCODE_DIR "opencode.exe"
+    Migrate-SessionDatabase -Version $Version -BinaryPath $opencodeExe
+
     Write-Step "Installing gentle-ai"
     $gentleLatest = Get-LatestVersion -Repo $GENTLE_REPO
     if (-not $gentleLatest) {
@@ -598,7 +843,11 @@ function Main {
     if ($gentleInstalled) {
         Write-Success "gentle-ai already at latest version ($gentleVersion), skipping."
     } else {
-        Install-Binary -Repo $GENTLE_REPO -OutputDir $GENTLE_DIR -AssetName "gentle-ai" -BinaryName "gentle-ai" -Version $gentleVersion
+        try {
+            Install-Binary -Repo $GENTLE_REPO -OutputDir $GENTLE_DIR -AssetName "gentle-ai" -BinaryName "gentle-ai" -Version $gentleVersion -ContinueOnError
+        } catch {
+            Write-Warn "gentle-ai install failed (continuing install): $($_.Exception.Message)"
+        }
     }
 
     Write-Step "Installing engram"
@@ -624,7 +873,11 @@ function Main {
     if ($engramInstalled) {
         Write-Success "engram already at latest version ($engramVersion), skipping."
     } else {
-        Install-Binary -Repo $ENGRAM_REPO -OutputDir $GENTLE_DIR -AssetName "engram" -BinaryName "engram" -Version $engramVersion
+        try {
+            Install-Binary -Repo $ENGRAM_REPO -OutputDir $GENTLE_DIR -AssetName "engram" -BinaryName "engram" -Version $engramVersion -ContinueOnError
+        } catch {
+            Write-Warn "engram install failed (continuing install): $($_.Exception.Message)"
+        }
     }
 
     # Verify engram DB integrity after binary swap. A new engram build may run a
@@ -649,11 +902,15 @@ function Main {
 
     Write-Step "Backing up Engram database (if exists)"
     if (Test-Path $engramDbPath) {
-        $backupName = "engram.db.backup-$(Get-Date -Format 'yyyyMMdd-HHmmss')"
-        $backupPath = Join-Path $engramDbDir $backupName
-        Copy-Item -Path $engramDbPath -Destination $backupPath -Force
-        $dbSize = (Get-Item $engramDbPath).Length
-        Write-Success "Backed up engram.db ($([math]::Round($dbSize / 1KB)) KB) -> $backupName"
+        try {
+            $backupName = "engram.db.backup-$(Get-Date -Format 'yyyyMMdd-HHmmss')"
+            $backupPath = Join-Path $engramDbDir $backupName
+            Copy-Item -Path $engramDbPath -Destination $backupPath -Force
+            $dbSize = (Get-Item $engramDbPath).Length
+            Write-Success "Backed up engram.db ($([math]::Round($dbSize / 1KB)) KB) -> $backupName"
+        } catch {
+            Write-Warn "engram.db backup failed (continuing install): $($_.Exception.Message)"
+        }
     } else {
         Write-Info "No existing engram.db found -- fresh install"
     }
@@ -1088,23 +1345,6 @@ function Main {
 
     if ($Desktop) {
         Write-Step "Installing desktop app"
-
-        # Gracefully stop engram HTTP server before force-kill to prevent data loss.
-        # engram serve (port 7437) may be mid-write — a SIGTERM-like request flushes first.
-        Write-Info "Stopping engram server gracefully..."
-        try {
-            Invoke-RestMethod -Uri "http://127.0.0.1:7437/shutdown" -Method Post -TimeoutSec 3 -ErrorAction SilentlyContinue
-            Start-Sleep -Seconds 2
-        } catch {}
-
-        # Kill any existing desktop app processes to avoid "file in use" errors.
-        # Match both the current product exe and legacy names so an updated
-        # installer can always replace the running app.
-        Write-Info "Stopping existing desktop app..."
-        foreach ($procName in @("one info code.exe", "@opencode-aidesktop.exe", "OpenCode Dev.exe", "opencode.exe")) {
-            taskkill /f /fi "IMAGENAME eq $procName" 2>$null | Out-Null
-        }
-        Start-Sleep -Seconds 2
 
         # Clean stale lockfile that prevents app from starting
         $lockfile = Join-Path $env:APPDATA "ai.opencode.desktop.dev\lockfile"

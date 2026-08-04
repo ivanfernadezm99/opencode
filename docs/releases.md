@@ -113,11 +113,15 @@ Usuario ejecuta install.bat (doble-click)
 
 ## ⚠️ Known Issues
 
-### Session data loss on update (v1.18.12, OPEN)
+### Sessions "missing" after update (RESOLVED — channel-switch DB)
 
-**DO NOT release a new version until this is fixed.** Running `install.ps1` to update from v1.18.11 to v1.18.12 caused ALL previous user sessions (Engram persistent memory) to disappear on the Windows machine. See `AGENTS.md` → "Known Critical Bugs" for full investigation details. Root cause pending.
+**Root cause**: OpenCode names its session DB after the build channel (`opencode-<channel>.db`). The fork builds from feature branches, so a client updating from one fork build to another (e.g. `dev` -> `dev-fork-snapshot`) gets a brand-new empty DB while the old sessions stay intact in the previous channel's DB. Nothing was deleted — the new channel just starts empty.
 
-**Until fixed**: users should NOT run `install.ps1` to update. Backup `%USERPROFILE%\.engram\engram.db` and `~/.local/share/opencode/opencode.db` before any installer run.
+**Fix**: `install.ps1` now runs `Migrate-SessionDatabase` right after the opencode binary install (before the new binary's first invocation), deriving the new channel from the freshly installed binary and copying the newest existing session DB (`opencode-*.db` / `opencode.db`, incl. `-wal`/`-shm`) into the new channel's DB **only when that destination is empty** — an existing DB of any size is never overwritten (the migration skips with a message instead). This covers both `-Desktop` and CLI-only installs.
+
+**Data safety**: before replacing any binary, `install.ps1` backs up every session DB (`opencode-*.db` / `opencode.db` + `-wal`/`-shm`) and `%USERPROFILE%\.engram\engram.db` to `*.backup-<timestamp>` copies, and never deletes the originals. The migration only copies into an empty destination, so an existing DB is never overwritten or removed.
+
+**Recovery**: if an update ever appears to lose sessions or memory, do NOT delete anything. The backups created before the update live next to the originals: rename the newest `opencode-*.db.backup-*` back to `opencode-<channel>.db` (remove a stale `-wal`/`-shm` first), and restore `engram.db.backup-*` the same way.
 
 ---
 
