@@ -627,6 +627,20 @@ function Main {
         Install-Binary -Repo $ENGRAM_REPO -OutputDir $GENTLE_DIR -AssetName "engram" -BinaryName "engram" -Version $engramVersion
     }
 
+    # Verify engram DB integrity after binary swap. A new engram build may run a
+    # schema migration on first start; detect a re-created (empty) DB before the
+    # backup step below overwrites the only good copy.
+    $engramDbDir = Join-Path $env:USERPROFILE ".engram"
+    $engramDbPath = Join-Path $engramDbDir "engram.db"
+    if (Test-Path $engramDbPath) {
+        $dbSizeAfter = (Get-Item $engramDbPath).Length
+        if ($dbSizeAfter -lt 1024) {
+            Write-Warn "engram.db suspiciously small after update ($dbSizeAfter bytes) — persistent memory may be lost. Check $engramDbDir for *.backup-* files."
+        } else {
+            Write-Success "engram.db intact after update ($([math]::Round($dbSizeAfter / 1KB)) KB)"
+        }
+    }
+
     Write-Step "Setting up PATH"
     if (-not $NoModifyPath) {
         Add-ToUserPath -Dir $OPENCODE_DIR
@@ -634,8 +648,6 @@ function Main {
     }
 
     Write-Step "Backing up Engram database (if exists)"
-    $engramDbDir = Join-Path $env:USERPROFILE ".engram"
-    $engramDbPath = Join-Path $engramDbDir "engram.db"
     if (Test-Path $engramDbPath) {
         $backupName = "engram.db.backup-$(Get-Date -Format 'yyyyMMdd-HHmmss')"
         $backupPath = Join-Path $engramDbDir $backupName
@@ -708,14 +720,8 @@ function Main {
     $tempDir = Join-Path $env:TEMP "opencode-skills-$(Get-Random)"
     $shouldInstall = $true
 
-    # Check if skills already installed with the current opencode version
-    if ((Test-Path $skillsStampFile) -and $Version) {
-        $installedVersion = (Get-Content $skillsStampFile -Raw).Trim()
-        if ($installedVersion -eq $Version) {
-            Write-Info "Skills already up to date (version $Version), skipping."
-            $shouldInstall = $false
-        }
-    }
+    # Always reinstall skills — sparse checkout is fast and clients need the
+    # latest skills even when the opencode version hasn't changed.
 
     if ($shouldInstall) {
         try {
@@ -1083,6 +1089,14 @@ function Main {
     if ($Desktop) {
         Write-Step "Installing desktop app"
 
+        # Gracefully stop engram HTTP server before force-kill to prevent data loss.
+        # engram serve (port 7437) may be mid-write — a SIGTERM-like request flushes first.
+        Write-Info "Stopping engram server gracefully..."
+        try {
+            Invoke-RestMethod -Uri "http://127.0.0.1:7437/shutdown" -Method Post -TimeoutSec 3 -ErrorAction SilentlyContinue
+            Start-Sleep -Seconds 2
+        } catch {}
+
         # Kill any existing desktop app processes to avoid "file in use" errors.
         # Match both the current product exe and legacy names so an updated
         # installer can always replace the running app.
@@ -1124,6 +1138,10 @@ function Main {
             if ($cronManifest -and (Test-Path $opencodeExe)) {
                 Write-Info "Setting up default crons for desktop app..."
                 $oldXdg = $env:XDG_DATA_HOME
+                # Lock engram to its real DB location so the XDG redirect
+                # cannot cause an empty DB to initialize under the desktop dir.
+                $oldEngramDir = $env:ENGRAM_DATA_DIR
+                $env:ENGRAM_DATA_DIR = Join-Path $env:USERPROFILE ".engram"
                 $env:XDG_DATA_HOME = $desktopDataDir
 
                 $desktopCronStamp = Join-Path $desktopDataDir ".default-crons-version"
@@ -1158,6 +1176,7 @@ function Main {
                     }
                 }
                 $env:XDG_DATA_HOME = $oldXdg
+                if ($null -eq $oldEngramDir) { Remove-Item Env:\ENGRAM_DATA_DIR -ErrorAction SilentlyContinue } else { $env:ENGRAM_DATA_DIR = $oldEngramDir }
             }
         } else {
             Write-Warn "Could not download desktop app installer"
