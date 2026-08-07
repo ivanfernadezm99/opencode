@@ -328,10 +328,10 @@ else { Test-Fail "Skills backup" "Expected \$dest.backup-\$script:backupStamp be
 # [9.8] Unconditional cron dedupe + non-zero exit -> Stop-WithError + stamp-after-all (W4/R4r)
 if ($content -match 'cron dedupe') { Test-Pass "Unconditional 'cron dedupe' present" }
 else { Test-Fail "cron dedupe" "Expected unconditional dedupe under XDG redirect (W4)" }
-if ($content -match '\$dedupeExit -ne 0\)[\s\S]*?Stop-WithError') { Test-Pass "Non-zero dedupe exit -> Stop-WithError (R4r)" }
+if ($content -match '\$dedupeRun\.ExitCode -ne 0\)[\s\S]*?Stop-WithError') { Test-Pass "Non-zero dedupe exit -> Stop-WithError (R4r)" }
 else { Test-Fail "Non-zero dedupe exit -> Stop-WithError" 'Expected Stop-WithError when cron dedupe fails (exit != 0)' }
 # cron add failures must also Stop-WithError (R4r) via the non-success branch
-if ($content -match 'if \(\$LASTEXITCODE -eq 0\)' -and $content -match 'Stop-WithError "Failed to create cron') { Test-Pass "Non-zero cron add exit -> Stop-WithError (R4r)" }
+if ($content -match 'if \(\$addRun\.ExitCode -eq 0\)' -and $content -match 'Stop-WithError "Failed to create cron') { Test-Pass "Non-zero cron add exit -> Stop-WithError (R4r)" }
 else { Test-Fail "Non-zero cron add -> Stop-WithError" 'Expected Stop-WithError on failed cron add' }
 if ($content -match 'Set-Content -Path \$desktopCronStamp') { Test-Pass "Desktop stamp written after adds (R4r)" }
 else { Test-Fail "Desktop stamp" "Expected Set-Content on \$desktopCronStamp after all adds" }
@@ -366,8 +366,8 @@ $bpStart = $content.IndexOf("function Backup-Path")
 $bpEnd = $content.IndexOf("function Restore-Path", $bpStart)
 if ($bpStart -ge 0 -and $bpEnd -gt $bpStart) {
     $bpBody = $content.Substring($bpStart, $bpEnd - $bpStart)
-    if ($bpBody -match 'incomplete-') { Test-Pass "Quarantine inside Backup-Path (partial never restorable)" }
-    else { Test-Fail "Quarantine placement" "Expected quarantine rename inside Backup-Path" }
+    if ($bpBody -match 'incomplete-' -or $bpBody -match 'Quarantine-PartialBackup') { Test-Pass "Quarantine inside Backup-Path (partial never restorable)" }
+    else { Test-Fail "Quarantine placement" "Expected quarantine (rename or Quarantine-PartialBackup) inside Backup-Path" }
     if ($bpBody -match 'catch' -and $bpBody -match 'throw') { Test-Pass "Backup-Path catches copy error and rethrows after quarantine" }
     else { Test-Fail "Backup-Path catch/rethrow" "Expected try/catch that quarantines then rethrows" }
 } else {
@@ -380,10 +380,13 @@ if ($content -match 'cron dedupe 2>&1 \| Out-Null') {
 } else {
     Test-Pass "No 2>&1 | Out-Null on cron dedupe [B2]"
 }
-if ($content -match 'cron dedupe 2>\s*\$dedupeTmp') { Test-Pass "cron dedupe stderr redirected to temp file (PS5.1-safe)" }
-else { Test-Fail "cron dedupe stderr redirect" "Expected 'cron dedupe 2> \$dedupeTmp' (stderr to file, not pipeline)" }
-if ($content -match '\$dedupeExit -ne 0') { Test-Pass "cron dedupe exit code checked" }
-else { Test-Fail "cron dedupe exit check" "Expected \$dedupeExit -ne 0 -> Stop-WithError" }
+if ($content -match 'Invoke-NativeRedirected -FilePath \$opencodeExe -Arguments @\("cron", "dedupe"\)') {
+    Test-Pass "cron dedupe routed through Invoke-NativeRedirected (stderr to file, PS5.1-safe)"
+} else {
+    Test-Fail "cron dedupe stderr redirect" "Expected dedupe via Invoke-NativeRedirected (2> to file, no pipeline merge)"
+}
+if ($content -match '\$dedupeRun\.ExitCode -ne 0') { Test-Pass "cron dedupe exit code checked" }
+else { Test-Fail "cron dedupe exit check" "Expected \$dedupeRun.ExitCode -ne 0 -> Stop-WithError" }
 
 # [10.3] C3: desktop installer non-zero exit -> Stop-WithError (not swallowed Write-Warn)
 if ($content -match 'Desktop installer exited with code') {
@@ -445,6 +448,165 @@ else { Test-Fail "Cache exclusion" "Expected GPUCache excluded from desktop back
 # [10.10] S: double-restore guard
 if ($content -match '\$script:restoreDone') { Test-Pass "restoreDone guard (single restore)" }
 else { Test-Fail "restoreDone guard" "Expected \$script:restoreDone guard in Restore-ClientData" }
+
+# ----- [11] Corrective gate 2 (3rd re-run): airtight quarantine, PS5.1 cron add, idempotent seed -----
+<#
+  Gate-2 feedback (both reviewers verified against the real file with runtime probes):
+  - B1a: partial backup must NEVER be restorable even when the quarantine rename FAILS —
+        verify the rename result; if it failed, delete AND write a .incomplete sentinel
+        inside $Dst; Restore-Path must refuse a backup carrying the sentinel.
+  - B1b: Restore-Path must not trust Test-Path alone — require a .backup-complete marker
+        written by Backup-Path only on success; refuse backups lacking it.
+  - B1c: sidecar purge only for DBs whose base .db is present in the backup; skip when empty.
+  - W5:  user-config block must run unconditional `cron dedupe` (mirror desktop) AND parse
+        the FULL multi-word job name (Test-CronJobNameExists), not the truncated first word.
+  - B2:  desktop/user cron add + cron list must NOT `2>&1`-merge native stderr under EAP=Stop
+        (PS5.1 NativeCommandError) — route through Invoke-NativeRedirected (2> $errTmp).
+  - CRITICAL4: dedupe exit init -1 + temp cleanup in finally (no stale $LASTEXITCODE / junk).
+  - W5 (restore): restoreDone set only AFTER all four Restore-Path calls return; catch prints
+        "RESTORE FAILED" loudly when a restore returns $false, not "restored".
+  - W6: Stop-WithError must restore BEFORE Stop-Transcript (restore actions captured in log).
+  - W7: postinstall cmd /c EAP restore must be in finally.
+  - W8: no-downgrade comparison must apply to mirror-resolved versions too.
+  - W9: cache-only desktop dir (only-excluded-items) is a LEGIT empty backup -> $true, not a block.
+#>
+Write-Host "--- [11] Corrective gate 2 (3rd re-run) ---" -ForegroundColor White
+
+# [11.1] B1a: Quarantine-PartialBackup verifies rename; on failure writes .incomplete sentinel
+if ($content -match 'function Quarantine-PartialBackup') { Test-Pass "Quarantine-PartialBackup function [B1a]" }
+else { Test-Fail "Quarantine-PartialBackup" "Expected a function that verifies the quarantine rename result" }
+$qStart = $content.IndexOf("function Quarantine-PartialBackup")
+$qEnd = if ($qStart -ge 0) { $content.IndexOf("function Restore-Path", $qStart) } else { -1 }
+if ($qStart -ge 0 -and $qEnd -gt $qStart) {
+    $qBody = $content.Substring($qStart, $qEnd - $qStart)
+    if ($qBody -match 'Rename-Item' -and $qBody -match '\.incomplete') { Test-Pass "Quarantine writes .incomplete sentinel on rename failure [B1a]" }
+    else { Test-Fail "Quarantine sentinel" "Expected Rename-Item attempt AND .incomplete sentinel fallback" }
+    if ($qBody -match 'Quarantined partial backup') { Test-Pass "Quarantined message only after confirmed rename [B1a]" }
+    else { Test-Fail "Quarantine confirm msg" "Expected 'Quarantined' only after rename succeeds" }
+} else {
+    Test-Fail "Quarantine-PartialBackup body" "Could not isolate Quarantine-PartialBackup function"
+}
+
+# [11.2] B1b: Restore-Path requires .backup-complete marker
+$rp11 = $content.IndexOf("function Restore-Path")
+$rp11End = if ($rp11 -ge 0) { $content.IndexOf("function Invoke-TaskKill", $rp11) } else { -1 }
+if ($rp11 -ge 0 -and $rp11End -gt $rp11) {
+    $rp11Body = $content.Substring($rp11, $rp11End - $rp11)
+    if ($rp11Body -match '\.backup-complete') { Test-Pass "Restore-Path requires .backup-complete marker [B1b]" }
+    else { Test-Fail "Restore completeness marker" "Expected Restore-Path to refuse backups lacking .backup-complete" }
+    if ($rp11Body -match '\.incomplete') { Test-Pass "Restore-Path refuses .incomplete sentinel [B1a]" }
+    else { Test-Fail "Restore incomplete refusal" "Expected Restore-Path to refuse a backup containing .incomplete" }
+} else {
+    Test-Fail "Restore-Path body" "Could not isolate Restore-Path for gate-2 checks"
+}
+# Backup-Path must write the marker only on success (Set-BackupCompleteMarker / .backup-complete Set-Content)
+if ($content -match 'function Set-BackupCompleteMarker') { Test-Pass "Set-BackupCompleteMarker function [B1b]" }
+else { Test-Fail "Set-BackupCompleteMarker" "Expected a helper that writes .backup-complete only on success" }
+
+# [11.3] B1c: sidecar purge gated on base .db present in backup + skip when empty
+if ($rp11 -ge 0 -and $rp11End -gt $rp11) {
+    $rp11Body = $content.Substring($rp11, $rp11End - $rp11)
+    if ($rp11Body -match 'Get-ChildItem -Path \$Backup[^\r\n]* -Filter "\*\.db"') { Test-Pass "Sidecar purge enumerates backup .db (base present) [B1c]" }
+    else { Test-Fail "Sidecar purge source" "Expected sidecar purge to enumerate DBs from the BACKUP, not the target" }
+    if ($rp11Body -match '\.Count -gt 0') { Test-Pass "Sidecar purge skipped when no DBs in backup [B1c]" }
+    else { Test-Fail "Sidecar purge empty guard" "Expected purge gated on backup .db count > 0" }
+}
+
+# [11.4] W5: user block runs unconditional cron dedupe + full-name parse helper
+if ($content -match 'Test-CronJobNameExists') { Test-Pass "Test-CronJobNameExists helper (full multi-word name) [W5]" }
+else { Test-Fail "Test-CronJobNameExists" "Expected a full-name existence matcher (fixes multi-word truncation)" }
+# The user-config block (not just desktop) must call cron dedupe.
+$userBlock = ""
+$uBlockStart = $content.IndexOf("Setting up default cron jobs")
+$uBlockEnd = $content.IndexOf("Installing credential manager", $uBlockStart)
+if ($uBlockStart -ge 0 -and $uBlockEnd -gt $uBlockStart) {
+    $userBlock = $content.Substring($uBlockStart, $uBlockEnd - $uBlockStart)
+    if ($userBlock -match 'cron.*dedupe') { Test-Pass "User-config block runs unconditional cron dedupe [W5]" }
+    else { Test-Fail "User-config dedupe" "Expected unconditional cron dedupe in the user-config block (mirror desktop)" }
+}
+
+# [11.5] B2: no 2>&1 merge on desktop/user cron add or cron list; route through Invoke-NativeRedirected
+if ($content -match 'function Invoke-NativeRedirected') { Test-Pass "Invoke-NativeRedirected helper [B2]" }
+else { Test-Fail "Invoke-NativeRedirected" "Expected a PS5.1-safe native runner (2> \$errTmp, exit-code gated)" }
+if ($content -match '& \$opencodeExe @cronArgs 2>&1') { Test-Fail "PS5.1 cron add" "Desktop/user cron add still uses 2>&1 merge (NativeCommandError hazard)" }
+else { Test-Pass "No 2>&1 merge on cron add [B2]" }
+if ($content -match '& \$opencodeExe cron list 2>&1') { Test-Fail "PS5.1 cron list" "cron list still uses 2>&1 merge" }
+else { Test-Pass "No 2>&1 merge on cron list [B2]" }
+
+# [11.6] CRITICAL4: Invoke-NativeRedirected inits exit -1, cleans temp in finally, never reads stale $LASTEXITCODE
+$inrStart = $content.IndexOf("function Invoke-NativeRedirected")
+$inrEnd = if ($inrStart -ge 0) { $content.IndexOf("function Backup-Path", $inrStart) } else { -1 }
+if ($inrStart -ge 0 -and $inrEnd -gt $inrStart) {
+    $inrBody = $content.Substring($inrStart, $inrEnd - $inrStart)
+    if ($inrBody -match '\$exitCode = -1') { Test-Pass "Invoke-NativeRedirected inits exit to -1 (no stale \$LASTEXITCODE) [CRITICAL4]" }
+    else { Test-Fail "Native exit init" "Expected \$exitCode = -1 before invocation" }
+    if ($inrBody -match 'finally\s*\{' -and $inrBody -match 'Remove-Item.*\$errTmp') { Test-Pass "Invoke-NativeRedirected cleans temp in finally [CRITICAL4]" }
+    else { Test-Fail "Native temp cleanup" "Expected Remove-Item \$errTmp in a finally block" }
+} else {
+    Test-Fail "Invoke-NativeRedirected body" "Could not isolate Invoke-NativeRedirected function"
+}
+
+# [11.7] W5(restore): restoreDone set only after all Restore-Path calls; catch prints RESTORE FAILED on $false
+$rcStart = $content.IndexOf("function Restore-ClientData")
+$rcEnd = if ($rcStart -ge 0) { $content.IndexOf("function Enforce-BackupRetention", $rcStart) } else { -1 }
+if ($rcStart -ge 0 -and $rcEnd -gt $rcStart) {
+    $rcBody = $content.Substring($rcStart, $rcEnd - $rcStart)
+    if ($rcBody -match '\$allOk' -or $rcBody -match 'return \$ok') { Test-Pass "Restore-ClientData returns success flag [W5-restore]" }
+    else { Test-Fail "Restore success flag" "Expected Restore-ClientData to return overall success" }
+    if ($rcBody -match 'Restore-Path.*\$allOk|Restore-Path.*\$ok') { Test-Pass "restoreDone set after all Restore-Path calls [W5-restore]" }
+    else { Test-Fail "restoreDone placement" "Expected restoreDone assigned after the four Restore-Path calls return" }
+}
+# Outer catch must distinguish restored vs RESTORE FAILED
+$catchBlock = ""
+$cStart = $content.IndexOf('catch {')
+$cEnd = $content.LastIndexOf('finally {')
+if ($cStart -ge 0 -and $cEnd -gt $cStart) {
+    $catchBlock = $content.Substring($cStart, $cEnd - $cStart)
+    if ($catchBlock -match 'RESTORE FAILED') { Test-Pass "Catch prints RESTORE FAILED loudly on failed restore [W5-restore]" }
+    else { Test-Fail "RESTORE FAILED message" "Expected the outer catch to distinguish failed restore from success" }
+}
+
+# [11.8] W6: Stop-WithError restores BEFORE Stop-Transcript
+$swe11 = $content.IndexOf("function Stop-WithError")
+$swe11End = if ($swe11 -ge 0) { $content.IndexOf("# --- Banner", $swe11) } else { -1 }
+if ($swe11 -ge 0 -and $swe11End -gt $swe11) {
+    $swe11Body = $content.Substring($swe11, $swe11End - $swe11)
+    $ri = $swe11Body.IndexOf("Restore-ClientData")
+    $ti = $swe11Body.IndexOf("Stop-Transcript")
+    if ($ri -ge 0 -and $ti -gt $ri) { Test-Pass "Stop-WithError restores before Stop-Transcript [W6]" }
+    else { Test-Fail "Stop-WithError order" "Expected Restore-ClientData BEFORE Stop-Transcript so restore actions are logged" }
+}
+
+# [11.9] W7: postinstall cmd /c EAP restore in finally
+$postInstall = ""
+$piStart = $content.IndexOf("Running postinstall for")
+$piEnd = if ($piStart -ge 0) { $content.IndexOf("Scan installed skills", $piStart) } else { -1 }
+if ($piStart -ge 0 -and $piEnd -gt $piStart) {
+    $postInstall = $content.Substring($piStart, $piEnd - $piStart)
+    if ($postInstall -match 'finally' -and $postInstall -match '\$ErrorActionPreference\s*=\s*\$prevEA') { Test-Pass "Postinstall EAP restore in finally [W7]" }
+    else { Test-Fail "Postinstall EAP finally" "Expected EAP restored in finally after cmd /c" }
+}
+
+# [11.10] W8: no-downgrade comparison applies to mirror-resolved versions too
+$guardBlock = ""
+$gStart = $content.IndexOf("no-downgrade guard")
+$gEnd = if ($gStart -ge 0) { $content.IndexOf('$opencodeInstalled', $gStart) } else { -1 }
+if ($gStart -ge 0 -and $gEnd -gt $gStart) {
+    $guardBlock = $content.Substring($gStart, $gEnd - $gStart)
+    if ($guardBlock -match 'older than installed' -and $guardBlock -match 'non-semver') { Test-Pass "No-downgrade guard covers mirror + non-semver note [W8]" }
+    else { Test-Fail "Mirror downgrade guard" "Expected no-downgrade comparison applied outside the -not \$UseMirror guard with a non-semver note" }
+}
+
+# [11.11] W9: cache-only desktop dir (only-excluded-items) is legit empty backup -> true
+$bp11 = $content.IndexOf("function Backup-Path")
+$bp11End = if ($bp11 -ge 0) { $content.IndexOf("function Restore-Path", $bp11) } else { -1 }
+if ($bp11 -ge 0 -and $bp11End -gt $bp11) {
+    $bp11Body = $content.Substring($bp11, $bp11End - $bp11)
+    if ($bp11Body -match 'hadExcludes') { Test-Pass "Backup-Path tracks hadExcludes (only-excluded-items) [W9]" }
+    else { Test-Fail "hadExcludes" "Expected Backup-Path to distinguish only-excluded-items from copy failure" }
+    if ($bp11Body -match 'isEmpty -and -not \$hadExcludes') { Test-Pass "Empty-with-excludes returns true (legit), empty-without-excludes fails [W9]" }
+    else { Test-Fail "W9 empty logic" "Expected empty backup to be legitimate only when excludes were applied" }
+}
 
 # ----- Summary -----
 Write-Host ""
