@@ -96,6 +96,59 @@ export function formatJobStatus(job: CronJobs.CronJob): string {
 // Shared layer: CronJobs service provided on top of AppRuntime's Database
 const cronLayer = CronJobs.layer
 
+export interface DedupeResult {
+  removed: number
+  kept: number
+  skippedNull: number
+}
+
+/**
+ * Collapse duplicate cron jobs by exact full name (case-insensitive).
+ * Jobs with a NULL name are never grouped — they are skipped entirely (C3).
+ * Within each name group the earliest `time_created` is kept and every other
+ * id is removed (D6).
+ */
+export const dedupe = Effect.fn("Cli.cron.dedupe")(() =>
+  Effect.gen(function* () {
+    const svc = yield* CronJobs.Service
+    const jobs = yield* svc.list()
+
+    const byName = new Map<string, CronJobs.CronJob[]>()
+    let skippedNull = 0
+    for (const job of jobs) {
+      if (job.name == null) {
+        skippedNull += 1
+        continue
+      }
+      const key = job.name.trim().toLowerCase()
+      const group = byName.get(key)
+      if (group) group.push(job)
+      else byName.set(key, [job])
+    }
+
+    const removeIds: string[] = []
+    let kept = 0
+    for (const group of byName.values()) {
+      let earliest = group[0]
+      for (const job of group) {
+        if (job.time_created < earliest.time_created) earliest = job
+      }
+      kept += 1
+      for (const job of group) {
+        if (job.id !== earliest.id) removeIds.push(job.id)
+      }
+    }
+
+    for (const id of removeIds) {
+      yield* svc.remove(id)
+    }
+
+    const result: DedupeResult = { removed: removeIds.length, kept, skippedNull }
+    yield* Effect.logInfo("DedupeResult", result)
+    return result
+  }),
+)
+
 // ─── Subcommands ───────────────────────────────────────────────────────────
 
 const AddCommand = effectCmd({
@@ -280,6 +333,19 @@ const StatusCommand = effectCmd({
     ),
 })
 
+const DedupeCommand = effectCmd({
+  command: "dedupe",
+  describe: "Remove duplicate cron jobs by name, keeping the earliest",
+  handler: () =>
+    Effect.gen(function* () {
+      const result = yield* dedupe()
+      UI.println(`Dedupe complete: ${result.removed} removed, ${result.kept} kept, ${result.skippedNull} skipped (unnamed)`)
+    }).pipe(
+      Effect.provide(cronLayer),
+      Effect.catchTag("CronJobServiceError", (e) => cliFail(e.message)),
+    ),
+})
+
 const TriggerCommand = effectCmd({
   command: "trigger <id>",
   describe: "Trigger a cron job immediately",
@@ -317,6 +383,7 @@ export const CronCommand = effectCmd({
       .command(ResumeCommand)
       .command(StatusCommand)
       .command(TriggerCommand)
-      .demandCommand(1, "Specify an action: add, list, remove, pause, resume, status, trigger"),
+      .command(DedupeCommand)
+      .demandCommand(1, "Specify an action: add, list, remove, pause, resume, status, trigger, dedupe"),
   handler: Effect.fn("Cli.cron")(function* () {}),
 })
