@@ -63,6 +63,16 @@ jobs:
             turbo-${{ runner.os }}-${{ hashFiles('turbo.json', '**/package.json') }}-
             turbo-${{ runner.os }}-
 
+      - name: Forbid test.only / describe.only
+        run: |
+          # bun test exits 0 when a file contains test.only plus a failing regular test,
+          # so a stray .only would make CI green while skipping the real suite (incl. the
+          # cron safety-net tests). Fail hard before running any tests.
+          if grep -rEn --include="*.test.ts" --include="*.test.tsx" -E "(^|[^._A-Za-z0-9])(describe|test|it)\.only\(" packages; then
+            echo "::error::forbid-only guard: test.only/it.only/describe.only is not allowed in committed tests"
+            exit 1
+          fi
+
       - name: Run unit tests
         timeout-minutes: 20
         run: GITHUB_ACTIONS=false bun turbo test

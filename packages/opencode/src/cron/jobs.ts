@@ -1,7 +1,7 @@
 import { Database } from "@opencode-ai/core/database/database"
 import { CronJobTable } from "@opencode-ai/core/cron/cron-job.sql"
 import { and, eq, isNull, lte, sql } from "drizzle-orm"
-import { Context, Effect, Layer, Schema } from "effect"
+import { Context, Effect, Exit, Layer, Schema } from "effect"
 import * as CronParser from "cron-parser"
 
 // ─── Schema Types ───────────────────────────────────────────────────────────
@@ -312,14 +312,15 @@ export const layer = Layer.effect(
           for (const row of rows) {
             const computed = computeNextRun(row, new Date())
             if (!computed || computed.getTime() <= now()) continue
-            // Per-row failure is isolated so one bad row never aborts the backfill
-            yield* db
+            // Per-row failure is isolated so one bad row never aborts the backfill,
+            // and only a row whose UPDATE actually succeeded counts as healed (F3).
+            const exit = yield* db
               .update(CronJobTable)
               .set({ next_run_at: computed.getTime(), time_updated: now() })
               .where(eq(CronJobTable.id, row.id))
               .run()
-              .pipe(Effect.orDie, Effect.ignore)
-            healed += 1
+              .pipe(Effect.orDie, Effect.exit)
+            if (Exit.isSuccess(exit)) healed += 1
           }
           return healed
         }),

@@ -662,6 +662,48 @@ describe("CronJobs service", () => {
     }),
   )
 
+  it.live("backfill does not count a row whose UPDATE fails, but still heals surviving siblings", () =>
+    Effect.gen(function* () {
+      const svc = yield* CronJobs.Service
+      const db = yield* CoreDatabase.Service
+      const time = Date.now()
+      const seed = (id: string) =>
+        db.db
+          .insert(CronJobTable)
+          .values({
+            id,
+            prompt: `job ${id}`,
+            schedule_kind: "interval",
+            schedule_expr: "3600",
+            enabled: 1,
+            state: "scheduled",
+            time_created: time,
+            time_updated: time,
+          })
+          .run()
+          .pipe(Effect.orDie)
+      // Force a real per-row UPDATE failure for one specific id via a SQLite trigger,
+      // so the row's heal path dies while every other row heals normally (isolation).
+      yield* db.db
+        .run(sql`CREATE TRIGGER fail_row BEFORE UPDATE OF next_run_at ON cron_job
+          WHEN NEW.id = 'failme' BEGIN SELECT RAISE(FAIL, 'forced per-row update failure'); END`)
+        .pipe(Effect.orDie)
+      yield* seed("failme")
+      yield* seed("survivor")
+
+      const healed = yield* svc.backfillNextRuns()
+      // The failed row must NOT be reported as healed; only the surviving sibling counts.
+      expect(healed).toBe(1)
+
+      const survivor = yield* svc.get("survivor")
+      expect(survivor).not.toBeNull()
+      expect(survivor!.next_run_at).not.toBeNull()
+      const failed = yield* svc.get("failme")
+      expect(failed).not.toBeNull()
+      expect(failed!.next_run_at).toBeNull()
+    }),
+  )
+
   it.live("advanceNextRun marks an expired once job done so it never double-fires", () =>
     Effect.gen(function* () {
       const svc = yield* CronJobs.Service
@@ -696,6 +738,26 @@ describe("CronJobs service", () => {
       expect(advanced.next_run_at).not.toBeNull()
       expect(advanced.next_run_at!).toBeGreaterThan(before) // strictly future, never past
       expect(advanced.enabled).toBe(1)
+    }),
+  )
+
+  it.live("advanceNextRun disables and errors a recurring job with an invalid expression", () =>
+    Effect.gen(function* () {
+      const svc = yield* CronJobs.Service
+      // A recurring (non-once) job whose expression cannot be advanced stays due forever
+      // unless advanceNextRun disables it — otherwise the ticker spins on it every 60s.
+      const created = yield* svc.create({
+        prompt: "recurring invalid",
+        schedule_kind: "cron",
+        schedule_expr: "not-a-cron",
+        next_run_at: Date.now() - 1000, // due
+      })
+      const advanced = yield* svc.advanceNextRun(created.id)
+      expect(advanced.enabled).toBe(0)
+      expect(advanced.state).toBe("error")
+      // No longer due — the ticker stops spinning on it every 60s
+      const due = yield* svc.getDueJobs()
+      expect(due.some((j) => j.id === created.id)).toBe(false)
     }),
   )
 

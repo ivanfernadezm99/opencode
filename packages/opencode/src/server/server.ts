@@ -103,8 +103,11 @@ const listenEffect: (opts: ListenOptions) => Effect.Effect<EffectListener, unkno
       )
 
       // Heal NULL next_run_at for enabled jobs once before the tick loop (D2). Idempotent.
+      // catchCause (not catch): every failure inside backfill is a DEFECT (select/update are
+      // orDie), so Effect.catch would let it escape and kill the forked fiber before the tick
+      // loop starts, silently killing cron (F2 — mirrors the advanceNextRun fix, D12/R2r).
       yield* cronJobs.backfillNextRuns().pipe(
-        Effect.catch((e) => Effect.logError("Cron backfillNextRuns failed", e)),
+        Effect.catchCause((cause) => Effect.logError("Cron backfillNextRuns failed", cause)),
       )
 
       // Simple tick loop: every 60s, fetch due jobs and execute them
