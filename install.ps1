@@ -690,14 +690,39 @@ function Migrate-SessionDatabase {
 # backup is missing or empty (D9/D14, R5r).
 
 function Backup-Path {
-    param([string]$Src, [string]$Dst)
+    param([string]$Src, [string]$Dst, [string[]]$Exclude = @())
     # R5r: a source that never existed means fresh install — skip with a note,
     # never abort. Abort happens later only when source exists but backup failed.
     if (-not (Test-Path $Src)) {
         Write-Info "Skipping backup: source absent (fresh install) $Src"
         return $true
     }
-    Copy-Item -Path $Src -Destination $Dst -Recurse -Force -ErrorAction Stop
+    # B1 (data-loss): a PARTIAL backup must never be restorable. If the copy
+    # throws mid-way (disk full, locked file), the partial $Dst would otherwise
+    # pass Restore-Path's Test-Path and overlay truncated data over intact live
+    # data. On any copy failure, quarantine the partial copy to *.incomplete-*
+    # (missing -> restore skips -> target untouched) and rethrow.
+    # W9: exclude locked cache subdirs (GPUCache, Code Cache, Crashpad, logs)
+    # from the desktop-dir scope so a helper-process lock cannot abort the update.
+    try {
+        if ($Exclude.Count -gt 0 -and (Test-Path $Src -PathType Container)) {
+            New-Item -ItemType Directory -Path $Dst -Force | Out-Null
+            Get-ChildItem -Path $Src -Force -ErrorAction Stop |
+                Where-Object { $_.Name -notin $Exclude } |
+                ForEach-Object {
+                    Copy-Item -Path $_.FullName -Destination $Dst -Recurse -Force -ErrorAction Stop
+                }
+        } else {
+            Copy-Item -Path $Src -Destination $Dst -Recurse -Force -ErrorAction Stop
+        }
+    } catch {
+        if (Test-Path $Dst) {
+            $quarantine = "$Dst.incomplete-$script:backupStamp"
+            Rename-Item -Path $Dst -NewName (Split-Path $quarantine -Leaf) -Force -ErrorAction SilentlyContinue
+            Write-Warn "Quarantined partial backup to $quarantine (never restorable)"
+        }
+        throw
+    }
     if (-not (Test-Path $Dst)) { return $false }
     $item = Get-Item $Dst
     $isEmpty = if ($item.PSIsContainer) {
@@ -719,7 +744,25 @@ function Restore-Path {
         New-Item -ItemType Directory -Path $Target -Force | Out-Null
     }
     try {
-        Copy-Item -Path "$Backup\*" -Destination $Target -Recurse -Force -ErrorAction Stop
+        # Enumerate with -Force so hidden dotfiles (.default-crons-version,
+        # .engram, .installed-version) are restored, not just the visible glob.
+        Get-ChildItem -Path $Backup -Force -ErrorAction Stop | ForEach-Object {
+            Copy-Item -Path $_.FullName -Destination $Target -Recurse -Force -ErrorAction Stop
+        }
+        # W8: purge stale live -wal/-shm sidecars. A post-backup -wal can survive
+        # next to a restored older *.db and replay the failed update's writes.
+        foreach ($db in @(Get-ChildItem -Path $Target -Recurse -Filter "*.db" -ErrorAction SilentlyContinue)) {
+            $rel = $db.FullName.Substring($Target.Length).TrimStart('\')
+            foreach ($suffix in @("-wal", "-shm")) {
+                $backupSidecar = Join-Path $Backup ($rel + $suffix)
+                $targetSidecar = $db.FullName + $suffix
+                if (Test-Path $backupSidecar) {
+                    Copy-Item -Path $backupSidecar -Destination $targetSidecar -Force -ErrorAction SilentlyContinue
+                } elseif (Test-Path $targetSidecar) {
+                    Remove-Item -Path $targetSidecar -Force -ErrorAction SilentlyContinue
+                }
+            }
+        }
         Write-Success "Restored: $Target"
     } catch {
         # A restore failure must never delete backups — log loudly and keep them.
@@ -728,10 +771,25 @@ function Restore-Path {
     }
 }
 
+function Invoke-TaskKill {
+    param([string]$ImageName)
+    # W4: taskkill writes to stderr (access denied / image not found). Under
+    # $ErrorActionPreference="Stop" on PS5.1 a redirected stderr line can become
+    # a terminating NativeCommandError — aborting a restore mid-copy. Set EAP to
+    # Continue for the taskkill call and restore it after.
+    $prevEA = $ErrorActionPreference
+    try {
+        $ErrorActionPreference = "Continue"
+        taskkill /f /fi "IMAGENAME eq $ImageName" 2>$null | Out-Null
+    } finally {
+        $ErrorActionPreference = $prevEA
+    }
+}
+
 function Stop-CronHolders {
     # Kill DB-lock holders so session/engram DBs can be overwritten during restore.
     foreach ($procName in @("one info code.exe", "@opencode-aidesktop.exe", "OpenCode Dev.exe", "opencode.exe", "engram.exe")) {
-        taskkill /f /fi "IMAGENAME eq $procName" 2>$null | Out-Null
+        Invoke-TaskKill -ImageName $procName
     }
     Start-Sleep -Seconds 1
 }
@@ -739,6 +797,10 @@ function Stop-CronHolders {
 function Restore-ClientData {
     # No-op when no backup was taken yet (an error before the backup step).
     if (-not $script:backupStamp) { return }
+    # Guard: restore exactly once even if both Stop-WithError and the outer catch
+    # run (double restore is idempotent but wasteful and doubles log noise).
+    if ($script:restoreDone) { return }
+    $script:restoreDone = $true
     Write-Step "Restoring client data from backups..."
     Stop-CronHolders
     $sessionDataDir  = Join-Path $env:USERPROFILE ".local\share\opencode"
@@ -872,7 +934,7 @@ function Main {
     # flushes mid-write state instead of being force-killed.
     Write-Info "Stopping running opencode processes..."
     foreach ($procName in @("one info code.exe", "@opencode-aidesktop.exe", "OpenCode Dev.exe", "opencode.exe")) {
-        taskkill /f /fi "IMAGENAME eq $procName" 2>$null | Out-Null
+        Invoke-TaskKill -ImageName $procName
     }
     Start-Sleep -Seconds 2
     Write-Info "Stopping engram server gracefully..."
@@ -883,7 +945,7 @@ function Main {
     # the binary can be replaced without a file-in-use failure.
     Start-Sleep -Seconds 2
     if (Get-Process -Name "engram" -ErrorAction SilentlyContinue) {
-        taskkill /f /fi "IMAGENAME eq engram.exe" 2>$null | Out-Null
+        Invoke-TaskKill -ImageName "engram.exe"
         Start-Sleep -Seconds 1
     }
 
@@ -897,7 +959,10 @@ function Main {
     # skipped (fresh install, R5r). No enclosing try/catch (R5): verification
     # failures propagate so the outer catch can restore.
     Write-Step "Backing up session and engram databases"
-    $script:backupStamp = Get-Date -Format 'yyyyMMdd-HHmmss'
+    # W6: millisecond precision so two runs within the same second never reuse a
+    # stamp and silently overwrite the previous verified backup via -Force.
+    $script:backupStamp = Get-Date -Format 'yyyyMMdd-HHmmssfff'
+    $script:restoreDone = $false
     $sessionDataDir  = Join-Path $env:USERPROFILE ".local\share\opencode"
     $engramDbDir     = Join-Path $env:USERPROFILE ".engram"
     $desktopDataDir  = Join-Path $env:APPDATA "ai.opencode.desktop.dev"
@@ -906,12 +971,13 @@ function Main {
     $backupMap = @(
         @{ Src = $sessionDataDir;  Dst = "$sessionDataDir.backup-$script:backupStamp" }
         @{ Src = $engramDbDir;     Dst = "$engramDbDir.backup-$script:backupStamp" }
-        @{ Src = $desktopDataDir;  Dst = "$desktopDataDir.backup-$script:backupStamp" }
+        @{ Src = $desktopDataDir;  Dst = "$desktopDataDir.backup-$script:backupStamp"; Exclude = @("GPUCache", "Code Cache", "Crashpad", "logs") }
         @{ Src = $globalConfigDir; Dst = "$globalConfigDir.backup-$script:backupStamp" }
     )
     $backupFailures = 0
     foreach ($entry in $backupMap) {
-        if (-not (Backup-Path -Src $entry.Src -Dst $entry.Dst)) {
+        $excl = if ($entry.Exclude) { $entry.Exclude } else { @() }
+        if (-not (Backup-Path -Src $entry.Src -Dst $entry.Dst -Exclude $excl)) {
             $backupFailures++
             Write-Err "Backup missing/empty for existing source $($entry.Src)"
         }
@@ -937,6 +1003,24 @@ function Main {
         if (-not $opencodeWindowsVersion) {
             Write-Warn "No Windows build found for opencode-fork. Using last known version..."
             $opencodeWindowsVersion = $FALLBACK_VERSION
+        }
+        # W7: never silently downgrade. When the latest tag 404s its Windows
+        # asset, Get-WindowsVersion walks back to an OLDER version; overwriting a
+        # newer installed binary with an older one risks a newer-schema session DB
+        # against an older binary. Refuse to install a resolved version older than
+        # the installed one and keep the current binary.
+        $installedWindows = Get-InstalledVersion -BinaryPath (Join-Path $OPENCODE_DIR "opencode.exe")
+        if ($installedWindows) {
+            try {
+                $resolvedVer = [version]($opencodeWindowsVersion -replace '^v', '')
+                $installedVer = [version]($installedWindows -replace '^v', '')
+                if ($resolvedVer -lt $installedVer) {
+                    Write-Warn "Resolved version $opencodeWindowsVersion is older than installed $installedWindows — keeping current binary."
+                    $opencodeWindowsVersion = $installedWindows
+                }
+            } catch {
+                Write-Warn "Could not compare resolved version $opencodeWindowsVersion vs installed — proceeding."
+            }
         }
         $Version = $opencodeWindowsVersion
     }
@@ -1393,6 +1477,10 @@ function Main {
                 Write-Warn "Could not list existing cron jobs — will attempt creation anyway"
             }
 
+            # W5: track whether any add failed; the stamp is written only when ALL
+            # adds succeeded so a failed default-cron seed is retried on the next
+            # update instead of being permanently skipped by the stamp.
+            $cronAddFailed = $false
             foreach ($job in $cronManifest.jobs) {
                 if ($job.name -in $existingJobs) {
                     Write-Info "Cron '$($job.name)' already exists, skipping."
@@ -1411,15 +1499,17 @@ function Main {
                     if ($LASTEXITCODE -eq 0) {
                         Write-Success "  Created cron: $($job.name)"
                     } else {
+                        $cronAddFailed = $true
                         Write-Warn "  Failed to create '$($job.name)': $result"
                     }
                 } catch {
+                    $cronAddFailed = $true
                     Write-Warn "  Error creating cron '$($job.name)': $_"
                 }
             }
 
-            # Stamp version to skip next time
-            if ($cronManifestVersion) {
+            # Stamp version to skip next time — only after ALL adds succeed (W5).
+            if ($cronManifestVersion -and -not $cronAddFailed) {
                 $null = New-Item -ItemType Directory -Path (Split-Path $cronStampFile -Parent) -Force
                 Set-Content -Path $cronStampFile -Value $cronManifestVersion -NoNewline
                 Write-Info "Default crons v$cronManifestVersion stamped."
@@ -1492,7 +1582,11 @@ function Main {
                 if ($proc.ExitCode -eq 0) {
                     Write-Success "Desktop app installed"
                 } else {
-                    Write-Warn "Desktop installer exited with code $($proc.ExitCode)"
+                    # C3: NSIS installers return non-zero (1=cancelled, 2=reboot
+                    # required) AFTER mutating %APPDATA%\ai.opencode.desktop.dev.
+                    # Swallowing it left the desktop app broken/mixed with no
+                    # rollback. Treat any non-zero exit as fatal -> Restore-ClientData.
+                    Stop-WithError "Desktop installer failed (exit $($proc.ExitCode)) — changes restored."
                 }
             } catch {
                 # FATAL (R4): the desktop installer mutates backed-up app data; a
@@ -1516,9 +1610,27 @@ function Main {
                 # Dedupe UNCONDITIONALLY before the stamp check (W4): already-stamped
                 # clients still hold the 2 duplicate jobs a prior buggy install left.
                 Write-Info "Deduplicating desktop cron jobs..."
-                & $opencodeExe cron dedupe 2>&1 | Out-Null
-                if ($LASTEXITCODE -ne 0) {
-                    Stop-WithError "cron dedupe failed for desktop DB (exit $LASTEXITCODE) — changes restored."
+                # B2 (PS5.1): `cron dedupe` prints its result to STDERR (UI.println).
+                # On Windows PowerShell 5.1, merging stderr into the pipeline with
+                # `2>&1` converts the first stderr line to a terminating
+                # NativeCommandError under $ErrorActionPreference="Stop" (fixed only
+                # in PS7.2+), aborting EVERY -Desktop update. Redirect stderr to a
+                # temp file instead (2> does not create error records in the success
+                # pipeline), then check the exit code.
+                $dedupeTmp = Join-Path $env:TEMP "opencode-cron-dedupe-$(Get-Random).log"
+                $dedupeExit = $null
+                try {
+                    & $opencodeExe cron dedupe 2> $dedupeTmp
+                    $dedupeExit = $LASTEXITCODE
+                } catch {
+                    # Belt-and-suspenders: if the 2> redirect still surfaces a
+                    # terminating error, a successful dedupe (exit 0) must not abort.
+                    $dedupeExit = $LASTEXITCODE
+                    if ($dedupeExit -ne 0) { throw }
+                }
+                Remove-Item -Path $dedupeTmp -Force -ErrorAction SilentlyContinue
+                if ($dedupeExit -ne 0) {
+                    Stop-WithError "cron dedupe failed for desktop DB (exit $dedupeExit) — changes restored."
                 }
 
                 $desktopCronStamp = Join-Path $desktopDataDir ".default-crons-version"

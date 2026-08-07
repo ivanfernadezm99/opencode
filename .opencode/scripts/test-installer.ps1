@@ -328,8 +328,11 @@ else { Test-Fail "Skills backup" "Expected \$dest.backup-\$script:backupStamp be
 # [9.8] Unconditional cron dedupe + non-zero exit -> Stop-WithError + stamp-after-all (W4/R4r)
 if ($content -match 'cron dedupe') { Test-Pass "Unconditional 'cron dedupe' present" }
 else { Test-Fail "cron dedupe" "Expected unconditional dedupe under XDG redirect (W4)" }
-if ($content -match '\$LASTEXITCODE -ne 0\)\s*\{\s*Stop-WithError') { Test-Pass "Non-zero exit -> Stop-WithError (R4r)" }
-else { Test-Fail "Non-zero exit -> Stop-WithError" 'Expected if ($LASTEXITCODE -ne 0) Stop-WithError on cron adds' }
+if ($content -match '\$dedupeExit -ne 0\)[\s\S]*?Stop-WithError') { Test-Pass "Non-zero dedupe exit -> Stop-WithError (R4r)" }
+else { Test-Fail "Non-zero dedupe exit -> Stop-WithError" 'Expected Stop-WithError when cron dedupe fails (exit != 0)' }
+# cron add failures must also Stop-WithError (R4r) via the non-success branch
+if ($content -match 'if \(\$LASTEXITCODE -eq 0\)' -and $content -match 'Stop-WithError "Failed to create cron') { Test-Pass "Non-zero cron add exit -> Stop-WithError (R4r)" }
+else { Test-Fail "Non-zero cron add -> Stop-WithError" 'Expected Stop-WithError on failed cron add' }
 if ($content -match 'Set-Content -Path \$desktopCronStamp') { Test-Pass "Desktop stamp written after adds (R4r)" }
 else { Test-Fail "Desktop stamp" "Expected Set-Content on \$desktopCronStamp after all adds" }
 
@@ -338,6 +341,110 @@ if ($content -match 'function Enforce-BackupRetention') { Test-Pass "Retention f
 else { Test-Fail "Retention" "Expected Enforce-BackupRetention (keep newest 8, W8)" }
 if ($content -match '\[int\]\$Keep = 8' -or $content -match '\$Keep = 8') { Test-Pass "Retention keeps newest 8" }
 else { Test-Fail "Retention count" "Expected keep-newest-8 (default 8)" }
+
+# ----- [10] Corrective gate (round 3): partial-backup quarantine, PS5.1, restore correctness -----
+<#
+  Gate feedback fixes (all verified against real file):
+  - B1: partial backup must NEVER be restorable -> quarantine to *.incomplete-* on copy failure.
+  - B2: PS5.1 `cron dedupe 2>&1 | Out-Null` aborts -Desktop updates (stderr -> NativeCommandError
+       under EAP=Stop); stderr must be redirected to a temp file, not merged into the pipeline.
+  - C3: desktop installer non-zero exit was swallowed; must Stop-WithError -> restore.
+  - W4: taskkill 2>$null under EAP=Stop can abort restore; wrap in EAP=Continue helper.
+  - W5: user-config cron stamp written even when per-job adds failed; gate on all-success.
+  - W6: backup stamp 1-second granularity -> add milliseconds (fff).
+  - W7: Get-WindowsVersion can silently downgrade; refuse resolved version older than installed.
+  - W8: Restore-Path must purge stale live -wal/-shm sidecars.
+  - W9: whole-desktop-dir backup with locked cache subdirs can block updates; exclude caches.
+  - S: double restore guard ($script:restoreDone).
+#>
+Write-Host "--- [10] Corrective gate (round 3) ---" -ForegroundColor White
+
+# [10.1] B1: partial backup quarantined (.incomplete-*), never restorable
+if ($content -match '\.incomplete-') { Test-Pass "Partial backup quarantine (.incomplete-*) [B1]" }
+else { Test-Fail "Partial backup quarantine" "Expected partial backup renamed to *.incomplete-* on copy failure" }
+$bpStart = $content.IndexOf("function Backup-Path")
+$bpEnd = $content.IndexOf("function Restore-Path", $bpStart)
+if ($bpStart -ge 0 -and $bpEnd -gt $bpStart) {
+    $bpBody = $content.Substring($bpStart, $bpEnd - $bpStart)
+    if ($bpBody -match 'incomplete-') { Test-Pass "Quarantine inside Backup-Path (partial never restorable)" }
+    else { Test-Fail "Quarantine placement" "Expected quarantine rename inside Backup-Path" }
+    if ($bpBody -match 'catch' -and $bpBody -match 'throw') { Test-Pass "Backup-Path catches copy error and rethrows after quarantine" }
+    else { Test-Fail "Backup-Path catch/rethrow" "Expected try/catch that quarantines then rethrows" }
+} else {
+    Test-Fail "Backup-Path body" "Could not isolate Backup-Path function body"
+}
+
+# [10.2] B2: PS5.1-safe cron dedupe (no 2>&1 pipeline merge on the dedupe invocation)
+if ($content -match 'cron dedupe 2>&1 \| Out-Null') {
+    Test-Fail "PS5.1 dedupe" "2>&1 | Out-Null on cron dedupe aborts on PS5.1 (NativeCommandError)"
+} else {
+    Test-Pass "No 2>&1 | Out-Null on cron dedupe [B2]"
+}
+if ($content -match 'cron dedupe 2>\s*\$dedupeTmp') { Test-Pass "cron dedupe stderr redirected to temp file (PS5.1-safe)" }
+else { Test-Fail "cron dedupe stderr redirect" "Expected 'cron dedupe 2> \$dedupeTmp' (stderr to file, not pipeline)" }
+if ($content -match '\$dedupeExit -ne 0') { Test-Pass "cron dedupe exit code checked" }
+else { Test-Fail "cron dedupe exit check" "Expected \$dedupeExit -ne 0 -> Stop-WithError" }
+
+# [10.3] C3: desktop installer non-zero exit -> Stop-WithError (not swallowed Write-Warn)
+if ($content -match 'Desktop installer exited with code') {
+    Test-Fail "Desktop installer exit" "Swallowed non-zero exit (must Stop-WithError -> restore)"
+} else {
+    Test-Pass "Desktop installer non-zero exit not swallowed [C3]"
+}
+if ($content -match 'Stop-WithError "Desktop installer failed') { Test-Pass "Desktop installer non-zero -> Stop-WithError" }
+else { Test-Fail "Desktop installer Stop-WithError" "Expected Stop-WithError on non-zero desktop installer exit" }
+
+# [10.4] W4: taskkill wrapped in EAP=Continue helper
+if ($content -match 'function Invoke-TaskKill') { Test-Pass "Invoke-TaskKill helper" }
+else { Test-Fail "Invoke-TaskKill" "Expected taskkill wrapped in EAP=Continue helper" }
+$tkStart = $content.IndexOf("function Invoke-TaskKill")
+$tkEnd = if ($tkStart -ge 0) { $content.IndexOf("function Restore-ClientData", $tkStart) } else { -1 }
+if ($tkStart -ge 0 -and $tkEnd -gt $tkStart) {
+    $tkBody = $content.Substring($tkStart, $tkEnd - $tkStart)
+    if ($tkBody -match '\$ErrorActionPreference\s*=\s*"Continue"') { Test-Pass "Invoke-TaskKill sets EAP=Continue [W4]" }
+    else { Test-Fail "Invoke-TaskKill EAP" "Expected EAP=Continue inside Invoke-TaskKill" }
+} else {
+    Test-Fail "Invoke-TaskKill body" "Could not isolate Invoke-TaskKill function"
+}
+$tkHelperCount = ([regex]::Matches($content, 'Invoke-TaskKill -ImageName')).Count
+if ($tkHelperCount -ge 3) { Test-Pass "All taskkill callsites routed through Invoke-TaskKill ($tkHelperCount)" }
+else { Test-Fail "taskkill callsites" "Expected >=3 Invoke-TaskKill -ImageName callsites, found $tkHelperCount" }
+
+# [10.5] W5: user-config cron stamp only after ALL adds succeed
+if ($content -match 'cronAddFailed') { Test-Pass "User-cron add-failure flag tracked (W5)" }
+else { Test-Fail "cronAddFailed" "Expected flag tracking failed cron adds" }
+if ($content -match '\$cronAddFailed[\s\S]*?Set-Content -Path \$cronStampFile' -or $content -match 'Set-Content -Path \$cronStampFile[\s\S]*?\$cronAddFailed') {
+    Test-Pass "User-cron stamp only after all adds succeed [W5]"
+} else {
+    Test-Fail "User-cron stamp gating" "Expected stamp write gated on all adds succeeding"
+}
+
+# [10.6] W6: backup stamp millisecond precision
+if ($content -match '\$script:backupStamp\s*=\s*Get-Date -Format[^\r\n]*fff') { Test-Pass "Backup stamp includes milliseconds (W6)" }
+else { Test-Fail "Backup stamp precision" "Expected yyyyMMdd-HHmmssfff (millisecond) backup stamp" }
+
+# [10.7] W7: no silent downgrade by Get-WindowsVersion
+if ($content -match 'older than installed') { Test-Pass "No-downgrade guard present (W7)" }
+else { Test-Fail "No-downgrade guard" "Expected Get-WindowsVersion to refuse installing a version older than installed" }
+
+# [10.8] W8: Restore-Path purges stale -wal/-shm sidecars
+$rpStart = $content.IndexOf("function Restore-Path")
+$rpEnd = $content.IndexOf("function Stop-CronHolders", $rpStart)
+if ($rpStart -ge 0 -and $rpEnd -gt $rpStart) {
+    $rpBody = $content.Substring($rpStart, $rpEnd - $rpStart)
+    if ($rpBody -match '"-wal"' -and $rpBody -match 'Remove-Item') { Test-Pass "Restore-Path purges stale sidecars (W8)" }
+    else { Test-Fail "Sidecar purge" "Expected Restore-Path to remove stale -wal/-shm not present in backup" }
+} else {
+    Test-Fail "Restore-Path body" "Could not isolate Restore-Path function"
+}
+
+# [10.9] W9: desktop cache subdirs excluded from backup
+if ($content -match 'GPUCache') { Test-Pass "Desktop cache subdirs excluded from backup (W9)" }
+else { Test-Fail "Cache exclusion" "Expected GPUCache excluded from desktop backup scope" }
+
+# [10.10] S: double-restore guard
+if ($content -match '\$script:restoreDone') { Test-Pass "restoreDone guard (single restore)" }
+else { Test-Fail "restoreDone guard" "Expected \$script:restoreDone guard in Restore-ClientData" }
 
 # ----- Summary -----
 Write-Host ""
