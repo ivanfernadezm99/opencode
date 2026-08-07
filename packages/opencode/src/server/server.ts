@@ -102,6 +102,11 @@ const listenEffect: (opts: ListenOptions) => Effect.Effect<EffectListener, unkno
         Effect.catch((e) => Effect.logError("Default crons seed failed", e)),
       )
 
+      // Heal NULL next_run_at for enabled jobs once before the tick loop (D2). Idempotent.
+      yield* cronJobs.backfillNextRuns().pipe(
+        Effect.catch((e) => Effect.logError("Cron backfillNextRuns failed", e)),
+      )
+
       // Simple tick loop: every 60s, fetch due jobs and execute them
       yield* Effect.logInfo("Cron ticker started")
       yield* Effect.gen(function* () {
@@ -110,6 +115,11 @@ const listenEffect: (opts: ListenOptions) => Effect.Effect<EffectListener, unkno
             Effect.catch(() => Effect.succeed([] as never)),
           )
           for (const job of due) {
+            // Advance BEFORE execute for at-most-once; catchCause (not catch) so the
+            // sync-throw DEFECT from a removed job never kills the ticker fiber (D12/R2r).
+            yield* cronJobs.advanceNextRun(job.id).pipe(
+              Effect.catchCause((cause) => Effect.logError("Cron advanceNextRun failed", cause)),
+            )
             yield* executor.execute(job).pipe(
               Effect.catch((e) => Effect.logError("Cron job failed", e)),
               Effect.forkIn(state.scope),
