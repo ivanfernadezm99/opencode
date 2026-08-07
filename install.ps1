@@ -64,7 +64,10 @@ function Stop-WithError {
     Write-Err $Message
     Write-Info "Log saved to: $INSTALL_LOG_FILE"
     Stop-Transcript | Out-Null
-    exit 1
+    # C2/W5: restore client data inline, then throw a terminating error so the
+    # outer try/catch around Main also runs. No longer a bare 'exit 1'.
+    Restore-ClientData
+    throw $Message
 }
 
 # --- Banner -----------------------------------------------------------------
@@ -141,17 +144,24 @@ function Get-WindowsVersion {
         Starts from $LatestVersion and walks backward if needed.
     #>
     $arch = Get-Arch
-    $zipName = "${BinaryName}_$($LatestVersion -replace '^v','')_windows_${arch}.zip"
+    # Windows amd64 releases have historically been published as
+    # _windows_amd64.zip, but some have used _windows_x64.zip for the same
+    # architecture. Accept both when probing for an amd64 build.
+    $archAliases = @($arch)
+    if ($arch -eq "amd64") { $archAliases += "x64" }
 
     # Quick check: does the latest release have a Windows asset?
-    $assetUrl = "https://github.com/$Repo/releases/download/$LatestVersion/$zipName"
-    try {
-        $check = Invoke-WebRequest -Uri $assetUrl -Method Head -UseBasicParsing -TimeoutSec 10
-        if ($check.StatusCode -eq 200 -or $check.StatusCode -eq 302) {
-            Write-Info "Windows build confirmed for $LatestVersion"
-            return $LatestVersion
-        }
-    } catch {}
+    foreach ($alias in $archAliases) {
+        $zipName = "${BinaryName}_$($LatestVersion -replace '^v','')_windows_${alias}.zip"
+        $assetUrl = "https://github.com/$Repo/releases/download/$LatestVersion/$zipName"
+        try {
+            $check = Invoke-WebRequest -Uri $assetUrl -Method Head -UseBasicParsing -TimeoutSec 10
+            if ($check.StatusCode -eq 200 -or $check.StatusCode -eq 302) {
+                Write-Info "Windows build confirmed for $LatestVersion"
+                return $LatestVersion
+            }
+        } catch {}
+    }
 
     # If HEAD check failed, query the release API for assets
     Write-Warn "$LatestVersion has no Windows build. Searching older releases..."
@@ -161,9 +171,11 @@ function Get-WindowsVersion {
         foreach ($rel in $releases) {
             $tag = $rel.tag_name
             foreach ($asset in $rel.assets) {
-                if ($asset.name -match "${BinaryName}_.*_windows_${arch}\.(zip|tar\.gz)") {
-                    Write-Success "Found Windows build in $tag"
-                    return $tag
+                foreach ($alias in $archAliases) {
+                    if ($asset.name -match "${BinaryName}_.*_windows_${alias}\.(zip|tar\.gz)") {
+                        Write-Success "Found Windows build in $tag"
+                        return $tag
+                    }
                 }
             }
         }
@@ -341,6 +353,19 @@ function Install-Binary {
         # Try primary download
         $ok = Download-WithRetry -Url $downloadUrl -OutFile $archivePath -Headers $mirrorHeaders
 
+        # Some releases publish the amd64 build under the x64 alias. Retry the
+        # download with the alias before giving up or falling through to the
+        # mirror.
+        if (-not $ok -and $arch -eq "amd64") {
+            $aliasName = $archiveName -replace '_windows_amd64\.zip$', '_windows_x64.zip'
+            if ($aliasName -ne $archiveName) {
+                $aliasUrl = $downloadUrl -replace [regex]::Escape($archiveName), $aliasName
+                Write-Warn "amd64 asset not found, trying x64 alias: $aliasName"
+                $ok = Download-WithRetry -Url $aliasUrl -OutFile $archivePath -Headers $mirrorHeaders
+                if ($ok) { $archiveName = $aliasName }
+            }
+        }
+
         # If primary fails and we're not already on mirror, try Nextcloud
         if (-not $ok -and -not $MirrorUrl -and $BinaryName -eq "opencode" -and $Version) {
             Write-Warn "GitHub download failed. Trying Nextcloud mirror..."
@@ -415,6 +440,29 @@ function Add-ToUserPath {
 }
 
 # --- Orphaned Shortcut Cleanup ---------------------------------------------
+
+function Get-DesktopAppExe {
+    <#
+    .SYNOPSIS
+        Locates the installed desktop app executable (one info code.exe),
+        preferring the newest copy under %LOCALAPPDATA%\Programs and falling
+        back to the uninstall registry DisplayIcon. Returns $null when the
+        desktop app is not installed.
+    #>
+    $installedExe = Get-ChildItem -Path (Join-Path $env:LOCALAPPDATA "Programs") -Filter "one info code.exe" -Recurse -ErrorAction SilentlyContinue |
+        Where-Object { $_.FullName -notmatch "Uninstall" } |
+        Sort-Object LastWriteTime -Descending |
+        Select-Object -First 1
+    if (-not $installedExe) {
+        $uninstallKey = Get-ItemProperty "HKCU:\Software\Microsoft\Windows\CurrentVersion\Uninstall\*" -ErrorAction SilentlyContinue |
+            Where-Object { $_.DisplayName -match "one info code" } |
+            Select-Object -First 1
+        if ($uninstallKey.DisplayIcon -and (Test-Path $uninstallKey.DisplayIcon)) {
+            $installedExe = Get-Item $uninstallKey.DisplayIcon
+        }
+    }
+    return $installedExe
+}
 
 function Clear-OrphanedShortcuts {
     <#
@@ -635,6 +683,90 @@ function Migrate-SessionDatabase {
     }
 }
 
+# --- Installer Update Safety (PR3) ------------------------------------------
+# Verified, copy-only backup + precise restore. Backups never delete originals;
+# restore is an overlay-from-backup. A legitimately absent source is skipped
+# (fresh install); a backup is only considered failed when an EXISTING source's
+# backup is missing or empty (D9/D14, R5r).
+
+function Backup-Path {
+    param([string]$Src, [string]$Dst)
+    # R5r: a source that never existed means fresh install — skip with a note,
+    # never abort. Abort happens later only when source exists but backup failed.
+    if (-not (Test-Path $Src)) {
+        Write-Info "Skipping backup: source absent (fresh install) $Src"
+        return $true
+    }
+    Copy-Item -Path $Src -Destination $Dst -Recurse -Force -ErrorAction Stop
+    if (-not (Test-Path $Dst)) { return $false }
+    $item = Get-Item $Dst
+    $isEmpty = if ($item.PSIsContainer) {
+        (Get-ChildItem $Dst -Force -ErrorAction SilentlyContinue).Count -eq 0
+    } else {
+        $item.Length -eq 0
+    }
+    # Non-empty required for dirs AND files (D9).
+    return -not $isEmpty
+}
+
+function Restore-Path {
+    param([string]$Backup, [string]$Target)
+    if (-not (Test-Path $Backup)) {
+        Write-Warn "Restore: no backup at $Backup — skipping (target left untouched)"
+        return
+    }
+    if (-not (Test-Path $Target)) {
+        New-Item -ItemType Directory -Path $Target -Force | Out-Null
+    }
+    try {
+        Copy-Item -Path "$Backup\*" -Destination $Target -Recurse -Force -ErrorAction Stop
+        Write-Success "Restored: $Target"
+    } catch {
+        # A restore failure must never delete backups — log loudly and keep them.
+        Write-Err "Restore FAILED for $Target from ${Backup}: $($_.Exception.Message)"
+        Write-Err "Backups retained at: $Backup"
+    }
+}
+
+function Stop-CronHolders {
+    # Kill DB-lock holders so session/engram DBs can be overwritten during restore.
+    foreach ($procName in @("one info code.exe", "@opencode-aidesktop.exe", "OpenCode Dev.exe", "opencode.exe", "engram.exe")) {
+        taskkill /f /fi "IMAGENAME eq $procName" 2>$null | Out-Null
+    }
+    Start-Sleep -Seconds 1
+}
+
+function Restore-ClientData {
+    # No-op when no backup was taken yet (an error before the backup step).
+    if (-not $script:backupStamp) { return }
+    Write-Step "Restoring client data from backups..."
+    Stop-CronHolders
+    $sessionDataDir  = Join-Path $env:USERPROFILE ".local\share\opencode"
+    $engramDbDir     = Join-Path $env:USERPROFILE ".engram"
+    $desktopDataDir  = Join-Path $env:APPDATA "ai.opencode.desktop.dev"
+    $globalConfigDir = Join-Path $env:USERPROFILE ".config\opencode"
+    # Overlay-from-backup in order: session -> desktop -> config -> engram (B4).
+    Restore-Path "$sessionDataDir.backup-$script:backupStamp"  $sessionDataDir
+    Restore-Path "$desktopDataDir.backup-$script:backupStamp"  $desktopDataDir
+    Restore-Path "$globalConfigDir.backup-$script:backupStamp" $globalConfigDir
+    Restore-Path "$engramDbDir.backup-$script:backupStamp"     $engramDbDir
+}
+
+function Enforce-BackupRetention {
+    param([string]$TargetPath, [int]$Keep = 8)
+    # W8: keep the newest $Keep *.backup-* per target family; never delete originals.
+    $dir = Split-Path $TargetPath -Parent
+    $leaf = Split-Path $TargetPath -Leaf
+    if (-not (Test-Path $dir)) { return }
+    $backups = @(Get-ChildItem -Path $dir -Filter "$leaf.backup-*" -ErrorAction SilentlyContinue)
+    if ($backups.Count -le $Keep) { return }
+    $stale = @($backups | Sort-Object LastWriteTime -Descending | Select-Object -Skip $Keep)
+    foreach ($b in $stale) {
+        Remove-Item -Path $b.FullName -Recurse -Force -ErrorAction SilentlyContinue
+        Write-Info "Retention: removed old backup $($b.Name)"
+    }
+}
+
 function Main {
     [CmdletBinding()]
     param(
@@ -755,50 +887,59 @@ function Main {
         Start-Sleep -Seconds 1
     }
 
-    # Back up ALL user data BEFORE replacing anything, just in case: every
-    # session DB (opencode-*.db across all channels, with -wal/-shm sidecars)
-    # and the engram persistent-memory DB. The installer never deletes these
-    # files and the migration below only copies into an empty destination, but
-    # a pre-update snapshot means a botched update can always be rolled back
-    # by hand. Best-effort: a backup failure warns and continues rather than
-    # aborting the install.
+    # Back up ALL user data BEFORE replacing anything: every session DB
+    # (opencode-*.db across all channels, with -wal/-shm sidecars), the engram
+    # persistent-memory DB, the desktop app data dir (incl. the
+    # .default-crons-version stamp), and the global config dir (incl. skills).
+    # Backups are copy-only — the originals are never deleted. A backup is
+    # verified non-empty before proceeding; a missing/empty backup for an
+    # EXISTING source aborts (D9/D14), while a legitimately absent source is
+    # skipped (fresh install, R5r). No enclosing try/catch (R5): verification
+    # failures propagate so the outer catch can restore.
     Write-Step "Backing up session and engram databases"
-    $backupStamp = Get-Date -Format 'yyyyMMdd-HHmmss'
-    $backupCount = 0
-    try {
-        $sessionDataDir = Join-Path $env:USERPROFILE ".local\share\opencode"
-        if (Test-Path $sessionDataDir) {
-            foreach ($sdb in @(Get-ChildItem -Path $sessionDataDir -Filter "opencode*.db" -File -ErrorAction SilentlyContinue)) {
-                foreach ($suffix in @("", "-wal", "-shm")) {
-                    $sp = "$($sdb.FullName)$suffix"
-                    if (Test-Path $sp) {
-                        Copy-Item -Path $sp -Destination "$sp.backup-$backupStamp" -Force -ErrorAction SilentlyContinue
-                        if (Test-Path "$sp.backup-$backupStamp") { $backupCount++ }
-                    }
-                }
-            }
+    $script:backupStamp = Get-Date -Format 'yyyyMMdd-HHmmss'
+    $sessionDataDir  = Join-Path $env:USERPROFILE ".local\share\opencode"
+    $engramDbDir     = Join-Path $env:USERPROFILE ".engram"
+    $desktopDataDir  = Join-Path $env:APPDATA "ai.opencode.desktop.dev"
+    $globalConfigDir = Join-Path $env:USERPROFILE ".config\opencode"
+
+    $backupMap = @(
+        @{ Src = $sessionDataDir;  Dst = "$sessionDataDir.backup-$script:backupStamp" }
+        @{ Src = $engramDbDir;     Dst = "$engramDbDir.backup-$script:backupStamp" }
+        @{ Src = $desktopDataDir;  Dst = "$desktopDataDir.backup-$script:backupStamp" }
+        @{ Src = $globalConfigDir; Dst = "$globalConfigDir.backup-$script:backupStamp" }
+    )
+    $backupFailures = 0
+    foreach ($entry in $backupMap) {
+        if (-not (Backup-Path -Src $entry.Src -Dst $entry.Dst)) {
+            $backupFailures++
+            Write-Err "Backup missing/empty for existing source $($entry.Src)"
         }
-        $engramDbDir = Join-Path $env:USERPROFILE ".engram"
-        $engramDbPath = Join-Path $engramDbDir "engram.db"
-        if (Test-Path $engramDbPath) {
-            foreach ($suffix in @("", "-wal", "-shm")) {
-                $ep = "$engramDbPath$suffix"
-                if (Test-Path $ep) {
-                    Copy-Item -Path $ep -Destination "$ep.backup-$backupStamp" -Force -ErrorAction SilentlyContinue
-                    if (Test-Path "$ep.backup-$backupStamp") { $backupCount++ }
-                }
-            }
-        }
-        if ($backupCount -gt 0) {
-            Write-Success "Backed up $backupCount session/engram file(s) -> *.backup-$backupStamp"
-        } else {
-            Write-Info "No existing session/engram databases to back up (fresh install)."
-        }
-    } catch {
-        Write-Warn "Pre-update data backup failed (continuing install): $($_.Exception.Message)"
     }
+    if ($backupFailures -gt 0) {
+        Stop-WithError "Pre-update backup failed for $backupFailures existing source(s) — changes restored."
+    }
+    # Retention (W8): keep the newest 8 backups per family; originals never deleted.
+    foreach ($family in @($sessionDataDir, $engramDbDir, $desktopDataDir, $globalConfigDir)) {
+        Enforce-BackupRetention -TargetPath $family
+    }
+    Write-Success "Client data backed up -> *.backup-$script:backupStamp"
 
     Write-Step "Installing opencode-fork"
+    # Validate that the latest tag actually ships a Windows build before
+    # downloading: some releases publish assets under a misnamed arch suffix
+    # (e.g. _windows_x64.zip) or miss the Windows zip entirely. Get-WindowsVersion
+    # walks back to the newest release that has a usable Windows asset so a bad
+    # release can never hard-stop the whole installer. When mirror mode is on,
+    # the mirror scan already matched an exact filename, so do not override it.
+    if ($Version -and -not $UseMirror) {
+        $opencodeWindowsVersion = Get-WindowsVersion -Repo $OPENCODE_REPO -BinaryName "opencode" -LatestVersion $Version
+        if (-not $opencodeWindowsVersion) {
+            Write-Warn "No Windows build found for opencode-fork. Using last known version..."
+            $opencodeWindowsVersion = $FALLBACK_VERSION
+        }
+        $Version = $opencodeWindowsVersion
+    }
     $opencodeInstalled = $Version -and (Get-InstalledVersion -BinaryPath (Join-Path $OPENCODE_DIR "opencode.exe")) -eq $Version
     if ($opencodeInstalled) {
         Write-Success "opencode already at latest version ($Version), skipping."
@@ -1002,10 +1143,13 @@ function Main {
                 # Copy each skill, skip node_modules
                 Get-ChildItem -Path $downloadedSkills -Directory | ForEach-Object {
                     $dest = Join-Path $skillsDir $_.Name
+                    # Copy-only (B1): never delete the user's existing skill dir.
+                    # Back it up, then overwrite individual files via a children
+                    # wildcard (no nesting) so a user-created skill is never wiped.
                     if (Test-Path $dest) {
-                        Remove-Item -Path $dest -Recurse -Force -ErrorAction SilentlyContinue
+                        Copy-Item -Path $dest "$dest.backup-$script:backupStamp" -Recurse -Force -ErrorAction Stop
                     }
-                    Copy-Item -Path $_.FullName -Destination $dest -Recurse -Force -Exclude "node_modules"
+                    Copy-Item -Path "$($_.FullName)\*" -Destination $dest -Recurse -Force -Exclude "node_modules" -ErrorAction Stop
                     Write-Success "  Skill '$($_.Name)' installed"
                     # Install skill dependencies if package.json exists
                     $pkgJson = Join-Path $dest "package.json"
@@ -1044,8 +1188,11 @@ function Main {
                 }
             }
         } catch {
-            Write-Warn "Could not download skills: $_"
-            Write-Warn "Skills can be cloned manually: git clone $repoUrl"
+            # FATAL (D8/R4): skills mutate backed-up data; a failure must propagate
+            # to the outer catch -> Restore-ClientData. No swallow-and-continue.
+            Write-Err "Could not install skills: $_"
+            Write-Err "Skills can be cloned manually: git clone $repoUrl"
+            Stop-WithError "Skill installation failed — changes restored."
         } finally {
             if (Test-Path $tempDir) { Remove-Item -Path $tempDir -Recurse -Force -ErrorAction SilentlyContinue }
         }
@@ -1302,27 +1449,6 @@ function Main {
         Write-Warn "Credential manager not installed. Skills can still use their own credential files."
     }
 
-    Write-Step "Creating desktop shortcut"
-    try {
-        $wsh = New-Object -ComObject WScript.Shell
-        $desktopPath = [Environment]::GetFolderPath("Desktop")
-        $shortcutPath = Join-Path $desktopPath "one info code.lnk"
-        $targetPath = Join-Path $OPENCODE_DIR "opencode.exe"
-
-        if (Test-Path $targetPath) {
-            $lnk = $wsh.CreateShortcut($shortcutPath)
-            $lnk.TargetPath = $targetPath
-            $lnk.WorkingDirectory = $OPENCODE_DIR
-            $lnk.Description = "one info code - AI-powered development environment"
-            $lnk.Save()
-            Write-Success "Shortcut created: $shortcutPath"
-        } else {
-            Write-Warn "opencode.exe not found -- skipping shortcut"
-        }
-    } catch {
-        Write-Warn "Could not create shortcut: $_"
-    }
-
     Write-Step "Verifying installation"
     $opencodeExe = Join-Path $OPENCODE_DIR "opencode.exe"
     if (Test-Path $opencodeExe) {
@@ -1369,7 +1495,10 @@ function Main {
                     Write-Warn "Desktop installer exited with code $($proc.ExitCode)"
                 }
             } catch {
-                Write-Warn "Could not run desktop installer: $_"
+                # FATAL (R4): the desktop installer mutates backed-up app data; a
+                # thrown error must propagate -> Restore-ClientData.
+                Write-Err "Could not run desktop installer: $_"
+                Stop-WithError "Desktop app install failed — changes restored."
             }
             Remove-Item -Path $desktopPath -Force -ErrorAction SilentlyContinue
 
@@ -1383,6 +1512,14 @@ function Main {
                 $oldEngramDir = $env:ENGRAM_DATA_DIR
                 $env:ENGRAM_DATA_DIR = Join-Path $env:USERPROFILE ".engram"
                 $env:XDG_DATA_HOME = $desktopDataDir
+
+                # Dedupe UNCONDITIONALLY before the stamp check (W4): already-stamped
+                # clients still hold the 2 duplicate jobs a prior buggy install left.
+                Write-Info "Deduplicating desktop cron jobs..."
+                & $opencodeExe cron dedupe 2>&1 | Out-Null
+                if ($LASTEXITCODE -ne 0) {
+                    Stop-WithError "cron dedupe failed for desktop DB (exit $LASTEXITCODE) — changes restored."
+                }
 
                 $desktopCronStamp = Join-Path $desktopDataDir ".default-crons-version"
                 $desktopStamped = if (Test-Path $desktopCronStamp) { (Get-Content $desktopCronStamp -Raw).Trim() } else { "" }
@@ -1403,12 +1540,16 @@ function Main {
                             if ($LASTEXITCODE -eq 0) {
                                 Write-Success "    Created cron: $($job.name)"
                             } else {
-                                Write-Warn "    Failed: $result"
+                                # Native exit codes never throw under $ErrorActionPreference="Stop"
+                                # (R4r) — check explicitly so a failed add restores.
+                                Stop-WithError "Failed to create cron '$($job.name)' (exit $LASTEXITCODE): $result — changes restored."
                             }
                         } catch {
-                            Write-Warn "    Error: $_"
+                            Stop-WithError "Error creating cron '$($job.name)': $_ — changes restored."
                         }
                     }
+                    # Stamp written only after ALL adds succeed (R4r): a failed add
+                    # must not leave a stamp with cron silently absent.
                     if ($cronManifestVersion) {
                         $null = New-Item -ItemType Directory -Path $desktopDataDir -Force
                         Set-Content -Path $desktopCronStamp -Value $cronManifestVersion -NoNewline
@@ -1426,18 +1567,7 @@ function Main {
         # Relaunch the desktop app after a successful install so the update
         # feels seamless (the app closed itself to allow file replacement).
         $launched = $false
-        $installedExe = Get-ChildItem -Path (Join-Path $env:LOCALAPPDATA "Programs") -Filter "one info code.exe" -Recurse -ErrorAction SilentlyContinue |
-            Where-Object { $_.FullName -notmatch "Uninstall" } |
-            Sort-Object LastWriteTime -Descending |
-            Select-Object -First 1
-        if (-not $installedExe) {
-            $uninstallKey = Get-ItemProperty "HKCU:\Software\Microsoft\Windows\CurrentVersion\Uninstall\*" -ErrorAction SilentlyContinue |
-                Where-Object { $_.DisplayName -match "one info code" } |
-                Select-Object -First 1
-            if ($uninstallKey.DisplayIcon -and (Test-Path $uninstallKey.DisplayIcon)) {
-                $installedExe = Get-Item $uninstallKey.DisplayIcon
-            }
-        }
+        $installedExe = Get-DesktopAppExe
         if ($installedExe) {
             try {
                 Start-Process -FilePath $installedExe.FullName
@@ -1450,6 +1580,41 @@ function Main {
         if (-not $launched) {
             Write-Info "Desktop app installed. Open it from the Start Menu (one info code)."
         }
+    }
+
+    # Create the desktop shortcut LAST so that with -Desktop it can point at
+    # the just-installed desktop app instead of the console CLI.
+    Write-Step "Creating desktop shortcut"
+    try {
+        $wsh = New-Object -ComObject WScript.Shell
+        $desktopPath = [Environment]::GetFolderPath("Desktop")
+        $shortcutPath = Join-Path $desktopPath "one info code.lnk"
+
+        $targetPath = Join-Path $OPENCODE_DIR "opencode.exe"
+        $workDir = $OPENCODE_DIR
+        if ($Desktop) {
+            $desktopExe = Get-DesktopAppExe
+            if ($desktopExe) {
+                $targetPath = $desktopExe.FullName
+                $workDir = Split-Path $targetPath -Parent
+            } else {
+                Write-Warn "Desktop app not found -- shortcut will point at the console version"
+            }
+        }
+
+        if (Test-Path $targetPath) {
+            $lnk = $wsh.CreateShortcut($shortcutPath)
+            $lnk.TargetPath = $targetPath
+            $lnk.WorkingDirectory = $workDir
+            $lnk.IconLocation = "$targetPath,0"
+            $lnk.Description = "one info code - AI-powered development environment"
+            $lnk.Save()
+            Write-Success "Shortcut created: $shortcutPath -> $targetPath"
+        } else {
+            Write-Warn "$targetPath not found -- skipping shortcut"
+        }
+    } catch {
+        Write-Warn "Could not create shortcut: $_"
     }
 
     Write-Host ""
@@ -1481,4 +1646,25 @@ for ($i = 0; $i -lt $args.Count; $i++) {
         '-Channel'      { if ($i+1 -lt $args.Count) { $mainParams['Channel'] = $args[++$i] } }
     }
 }
-Main @mainParams
+
+# Single restore hook (D7/C2/W5): any terminating error reaches the catch, which
+# restores client data from the pre-update backup; env vars are restored in
+# finally (W7) regardless of the path Main took.
+$oldXdg = $env:XDG_DATA_HOME
+$oldEngramDir = $env:ENGRAM_DATA_DIR
+$oldChannel = $env:GENTLE_AI_CHANNEL
+try {
+    Main @mainParams
+}
+catch {
+    Write-Err "Install failed: $($_.Exception.Message)"
+    Restore-ClientData
+    Write-Err "Client data restored from backups: *.backup-$script:backupStamp"
+    Stop-Transcript -ErrorAction SilentlyContinue | Out-Null
+    throw
+}
+finally {
+    if ($null -eq $oldXdg) { Remove-Item Env:\XDG_DATA_HOME -ErrorAction SilentlyContinue } else { $env:XDG_DATA_HOME = $oldXdg }
+    if ($null -eq $oldEngramDir) { Remove-Item Env:\ENGRAM_DATA_DIR -ErrorAction SilentlyContinue } else { $env:ENGRAM_DATA_DIR = $oldEngramDir }
+    $env:GENTLE_AI_CHANNEL = $oldChannel
+}
