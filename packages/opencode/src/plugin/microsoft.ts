@@ -20,12 +20,15 @@ const CLIENT_ID = "cb06d541-ed31-4195-b7ff-d2b50084da6f"
 const DEFAULT_SCOPES = "openid email profile offline_access"
 
 // Microsoft requires the redirect_uri to match exactly what was registered in
-// the Azure AD app registration. Pinning to a single known origin+port avoids
-// having to update the AAD registration for every deployment.
+// the Azure AD app registration. Loopback redirects on 127.0.0.1 are accepted
+// on any OS-assigned port (RFC 8252 §7.3), so we bind a dynamic port and build
+// the redirect URI from the real bound port at listen time.
 const OAUTH_HOST = "127.0.0.1"
-const OAUTH_PORT = 53800
 const OAUTH_REDIRECT_PATH = "/callback"
-const REDIRECT_URI = `http://${OAUTH_HOST}:${OAUTH_PORT}${OAUTH_REDIRECT_PATH}`
+
+export function buildRedirectUri(port: number): string {
+  return `http://${OAUTH_HOST}:${port}${OAUTH_REDIRECT_PATH}`
+}
 
 // Bounds for the device-code poll loop. Microsoft returns `interval` (seconds)
 // but we floor it to avoid hammering and we add the spec's slow_down increment.
@@ -46,6 +49,10 @@ interface MicrosoftAuthPluginOptions {
   tenant?: string
   clientId?: string
   scopes?: string
+  /**
+   * @deprecated Internal — the redirect URI is derived from an OS-assigned
+   * dynamic loopback port at login time and is no longer read from options.
+   */
   redirectUri?: string
 }
 
@@ -61,7 +68,9 @@ function getConfig(options: MicrosoftAuthPluginOptions = {}): MicrosoftConfig {
     tenant: options.tenant ?? DEFAULT_TENANT,
     clientId: options.clientId ?? process.env["MICROSOFT_CLIENT_ID"] ?? CLIENT_ID,
     scopes: options.scopes ?? DEFAULT_SCOPES,
-    redirectUri: options.redirectUri ?? REDIRECT_URI,
+    // Placeholder until a dynamic port is bound at authorize time; the
+    // authorize hook overwrites this with the real bound redirect URI.
+    redirectUri: buildRedirectUri(0),
   }
 }
 
@@ -289,11 +298,12 @@ export function buildAuthorizeUrl(
   state: string,
   clientId: string,
   scopes: string,
+  redirectUri: string,
 ): string {
   const params = new URLSearchParams({
     response_type: "code",
     client_id: clientId,
-    redirect_uri: REDIRECT_URI,
+    redirect_uri: redirectUri,
     scope: scopes,
     code_challenge: pkce.challenge,
     code_challenge_method: "S256",
@@ -536,16 +546,19 @@ interface PendingOAuth {
 
 let oauthServer: ReturnType<typeof createServer> | undefined
 let pendingOAuth: PendingOAuth | undefined
+// Captured when the server binds so the request handler and short-circuit
+// startOAuthServer() can rebuild the redirect URI from the real bound port.
+let oauthServerPort: number | undefined
 // Captured when waitForOAuthCallback is called so the server handler
 // (created once and reused) can access the per-request config.
 let pendingOAuthConfig: MicrosoftConfig | undefined
 
 export async function startOAuthServer(): Promise<{ port: number; redirectUri: string }> {
-  if (oauthServer) return { port: OAUTH_PORT, redirectUri: REDIRECT_URI }
+  if (oauthServer) return { port: oauthServerPort!, redirectUri: buildRedirectUri(oauthServerPort!) }
 
   const server = createServer((req, res) => {
     const reqUrl = req.url || "/"
-    const url = new URL(reqUrl, `http://${OAUTH_HOST}:${OAUTH_PORT}`)
+    const url = new URL(reqUrl, `http://${OAUTH_HOST}:${oauthServerPort}`)
 
     if (url.pathname === OAUTH_REDIRECT_PATH) {
       const code = url.searchParams.get("code")
@@ -617,19 +630,28 @@ export async function startOAuthServer(): Promise<{ port: number; redirectUri: s
   await new Promise<void>((resolve, reject) => {
     const onError = (err: Error) => {
       oauthServer = undefined
+      oauthServerPort = undefined
       reject(err)
     }
     server.once("error", onError)
-    server.listen(OAUTH_PORT, OAUTH_HOST, () => {
+    server.listen(0, OAUTH_HOST, () => {
       server.removeListener("error", onError)
       server.on("error", (err) => console.warn("microsoft oauth server error", { error: err }))
-      console.log("microsoft oauth server started", { host: OAUTH_HOST, port: OAUTH_PORT })
+      const address = server.address()
+      if (!address || typeof address === "string") {
+        oauthServer = undefined
+        oauthServerPort = undefined
+        reject(new Error("Unable to resolve Microsoft OAuth callback port"))
+        return
+      }
+      oauthServerPort = address.port
+      console.log("microsoft oauth server started", { host: OAUTH_HOST, port: address.port })
       resolve()
     })
     oauthServer = server
   })
 
-  return { port: OAUTH_PORT, redirectUri: REDIRECT_URI }
+  return { port: oauthServerPort!, redirectUri: buildRedirectUri(oauthServerPort!) }
 }
 
 function resetPendingOAuth() {
@@ -641,6 +663,7 @@ export function stopOAuthServer() {
   if (oauthServer) {
     oauthServer.close(() => console.log("microsoft oauth server stopped"))
     oauthServer = undefined
+    oauthServerPort = undefined
   }
 }
 
@@ -698,7 +721,7 @@ function requireClientId(config: MicrosoftConfig): string {
       "Set MICROSOFT_CLIENT_ID environment variable or pass `clientId` in plugin options. " +
       "Register an Azure AD app (public client/native) at " +
       "https://portal.azure.com/#view/Microsoft_AAD_RegisteredApps/CreateApplicationBlade " +
-      "with redirect URI: " + REDIRECT_URI,
+      "with a loopback redirect URI (http://127.0.0.1 or http://localhost, any port, per RFC 8252 §7.3).",
     )
   }
   return config.clientId
@@ -807,7 +830,8 @@ export async function MicrosoftAuthPlugin(
           type: "oauth",
           authorize: async () => {
             requireClientId(config)
-            await startOAuthServer()
+            const { redirectUri } = await startOAuthServer()
+            config.redirectUri = redirectUri
             const pkce = await generatePKCE()
             const state = generateState()
             const authUrl = buildAuthorizeUrl(
@@ -816,6 +840,7 @@ export async function MicrosoftAuthPlugin(
               state,
               config.clientId,
               config.scopes,
+              redirectUri,
             )
 
             const callbackPromise = waitForOAuthCallback(pkce, state, config)

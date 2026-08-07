@@ -1,6 +1,16 @@
-import { afterEach, expect, test } from "bun:test"
-import { MicrosoftAuthPlugin } from "@/plugin/microsoft"
-import { makeMicrosoftModel, readMicrosoftModels, readMicrosoftModelsBaseURL } from "@/plugin/microsoft"
+import { afterEach, beforeEach, expect, test } from "bun:test"
+import {
+  MicrosoftAuthPlugin,
+  buildAuthorizeUrl,
+  buildRedirectUri,
+  generatePKCE,
+  generateState,
+  makeMicrosoftModel,
+  readMicrosoftModels,
+  readMicrosoftModelsBaseURL,
+  startOAuthServer,
+  stopOAuthServer,
+} from "@/plugin/microsoft"
 
 const GITHUB_MODELS_INFERENCE_URL = "https://models.github.ai/inference"
 
@@ -78,4 +88,59 @@ test("model helpers produce a complete model surface", () => {
   expect(model.api.npm).toBe("@ai-sdk/openai-compatible")
   expect(model.capabilities.toolcall).toBe(true)
   expect(model.limit.context).toBeGreaterThan(0)
+})
+
+// --- Dynamic OAuth loopback port (microsoft-oauth-dynamic-port) ---
+
+test("buildRedirectUri produces the exact loopback redirect format", () => {
+  expect(buildRedirectUri(53800)).toBe("http://127.0.0.1:53800/callback")
+  expect(buildRedirectUri(42951)).toBe("http://127.0.0.1:42951/callback")
+  expect(buildRedirectUri(1)).toBe("http://127.0.0.1:1/callback")
+})
+
+test("buildAuthorizeUrl uses the passed redirectUri literal for the redirect_uri param", async () => {
+  const pkce = await generatePKCE()
+  const state = generateState()
+  const redirectUri = "http://127.0.0.1:49123/callback"
+  const url = buildAuthorizeUrl(
+    "example.onmicrosoft.com",
+    pkce,
+    state,
+    "client-123",
+    "openid profile",
+    redirectUri,
+  )
+  expect(new URL(url).searchParams.get("redirect_uri")).toBe(redirectUri)
+})
+
+test("buildAuthorizeUrl redirect_uri reflects a different dynamic port", async () => {
+  const pkce = await generatePKCE()
+  const redirectUri = buildRedirectUri(0)
+  const url = buildAuthorizeUrl("t", pkce, "s", "c", "openid", redirectUri)
+  expect(new URL(url).searchParams.get("redirect_uri")).toBe(redirectUri)
+})
+
+test("startOAuthServer binds port 0, returns a real port and matching redirectUri; reuses it on second call", async () => {
+  try {
+    const first = await startOAuthServer()
+    expect(first.port).toBeGreaterThan(0)
+    expect(first.redirectUri).toBe(buildRedirectUri(first.port))
+
+    const second = await startOAuthServer()
+    expect(second).toEqual(first)
+  } finally {
+    stopOAuthServer()
+  }
+})
+
+test("stopOAuthServer clears the port and allows a fresh bind on the next start", async () => {
+  const first = await startOAuthServer()
+  stopOAuthServer()
+  try {
+    const bound = await startOAuthServer()
+    expect(bound.port).toBeGreaterThan(0)
+    expect(bound.redirectUri).toBe(buildRedirectUri(bound.port))
+  } finally {
+    stopOAuthServer()
+  }
 })

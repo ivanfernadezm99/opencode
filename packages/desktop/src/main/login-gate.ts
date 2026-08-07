@@ -22,9 +22,11 @@ const DEFAULT_TENANT = "oneinfoconsulting.com"
 const DEFAULT_CLIENT_ID = "cb06d541-ed31-4195-b7ff-d2b50084da6f"
 const DEFAULT_SCOPES = "openid email profile offline_access"
 const OAUTH_HOST = "127.0.0.1"
-const OAUTH_PORT = 53800
 const OAUTH_REDIRECT_PATH = "/callback"
-const REDIRECT_URI = `http://${OAUTH_HOST}:${OAUTH_PORT}${OAUTH_REDIRECT_PATH}`
+
+function buildRedirectUri(port: number): string {
+  return `http://${OAUTH_HOST}:${port}${OAUTH_REDIRECT_PATH}`
+}
 
 const WINDOW_WIDTH = 440
 const WINDOW_HEIGHT = 540
@@ -36,7 +38,9 @@ function resolveMicrosoftConfig() {
     tenant: process.env["MICROSOFT_TENANT"] ?? DEFAULT_TENANT,
     clientId: process.env["MICROSOFT_CLIENT_ID"] ?? DEFAULT_CLIENT_ID,
     scopes: process.env["MICROSOFT_SCOPES"] ?? DEFAULT_SCOPES,
-    redirectUri: REDIRECT_URI,
+    // Placeholder until a dynamic port is bound at authorize time; the exchange
+    // path merges the real bound redirect URI (boundRedirectUri) when present.
+    redirectUri: buildRedirectUri(0),
   }
 }
 
@@ -79,11 +83,11 @@ function generateState(): string {
   return base64UrlEncode(crypto.getRandomValues(new Uint8Array(32)).buffer)
 }
 
-function buildAuthorizeUrl(tenant: string, pkce: PkceCodes, state: string, clientId: string, scopes: string): string {
+function buildAuthorizeUrl(tenant: string, pkce: PkceCodes, state: string, clientId: string, scopes: string, redirectUri: string): string {
   const params = new URLSearchParams({
     response_type: "code",
     client_id: clientId,
-    redirect_uri: REDIRECT_URI,
+    redirect_uri: redirectUri,
     scope: scopes,
     code_challenge: pkce.challenge,
     code_challenge_method: "S256",
@@ -105,6 +109,10 @@ interface TokenResponse {
 }
 
 let oauthServer: ReturnType<typeof createServer> | undefined
+// Captured at bind time so the request handler can rebuild the base URL and
+// the exchange can reuse the real bound redirect URI for the whole flow.
+let oauthServerPort: number | undefined
+let boundRedirectUri: string | undefined
 let pendingOAuth:
   | { pkce: PkceCodes; state: string; resolve: (tokens: TokenResponse) => void; reject: (error: Error) => void }
   | undefined
@@ -131,13 +139,13 @@ async function exchangeCodeForTokens(code: string, pkce: PkceCodes, config: Retu
   return response.json() as Promise<TokenResponse>
 }
 
-function startOAuthServer(): Promise<void> {
-  if (oauthServer) return Promise.resolve()
+function startOAuthServer(): Promise<{ port: number; redirectUri: string }> {
+  if (oauthServer) return Promise.resolve({ port: oauthServerPort!, redirectUri: boundRedirectUri! })
 
   const logger = getLogger()
   const server = createServer((req, res) => {
     const reqUrl = req.url || "/"
-    const url = new URL(reqUrl, `http://${OAUTH_HOST}:${OAUTH_PORT}`)
+    const url = new URL(reqUrl, `http://${OAUTH_HOST}:${oauthServerPort}`)
 
     if (url.pathname === OAUTH_REDIRECT_PATH) {
       const code = url.searchParams.get("code")
@@ -173,7 +181,9 @@ function startOAuthServer(): Promise<void> {
       const current = pendingOAuth
       pendingOAuth = undefined
 
-      exchangeCodeForTokens(code, current.pkce, resolveMicrosoftConfig())
+      const config = resolveMicrosoftConfig()
+      if (boundRedirectUri) config.redirectUri = boundRedirectUri
+      exchangeCodeForTokens(code, current.pkce, config)
         .then((tokens) => current.resolve(tokens))
         .catch((err) => current.reject(err))
 
@@ -194,17 +204,29 @@ function startOAuthServer(): Promise<void> {
     res.end("Not found")
   })
 
-  return new Promise<void>((resolve, reject) => {
+  return new Promise<{ port: number; redirectUri: string }>((resolve, reject) => {
     const onError = (err: Error) => {
       oauthServer = undefined
+      oauthServerPort = undefined
+      boundRedirectUri = undefined
       reject(err)
     }
     server.once("error", onError)
-    server.listen(OAUTH_PORT, OAUTH_HOST, () => {
+    server.listen(0, OAUTH_HOST, () => {
       server.removeListener("error", onError)
       server.on("error", (err) => logger.warn("microsoft oauth server error", err))
-      logger.log("microsoft oauth server started", { host: OAUTH_HOST, port: OAUTH_PORT })
-      resolve()
+      const address = server.address()
+      if (!address || typeof address === "string") {
+        oauthServer = undefined
+        oauthServerPort = undefined
+        boundRedirectUri = undefined
+        reject(new Error("Unable to resolve Microsoft OAuth callback port"))
+        return
+      }
+      oauthServerPort = address.port
+      boundRedirectUri = buildRedirectUri(address.port)
+      logger.log("microsoft oauth server started", { host: OAUTH_HOST, port: address.port })
+      resolve({ port: address.port, redirectUri: boundRedirectUri })
     })
     oauthServer = server
   })
@@ -214,6 +236,8 @@ function stopOAuthServer() {
   if (oauthServer) {
     oauthServer.close()
     oauthServer = undefined
+    oauthServerPort = undefined
+    boundRedirectUri = undefined
   }
 }
 
@@ -222,10 +246,10 @@ async function runMicrosoftOAuth(serverUrl: string, serverPassword: string): Pro
   const config = resolveMicrosoftConfig()
 
   try {
-    await startOAuthServer()
+    const { redirectUri } = await startOAuthServer()
     const pkce = await generatePKCE()
     const state = generateState()
-    const authUrl = buildAuthorizeUrl(config.tenant, pkce, state, config.clientId, config.scopes)
+    const authUrl = buildAuthorizeUrl(config.tenant, pkce, state, config.clientId, config.scopes, redirectUri)
 
     logger.log("microsoft oauth opening browser", { url: authUrl })
 
