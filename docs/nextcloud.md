@@ -6,7 +6,7 @@ Mirror de descarga para assets de release de gentle-opencode, alojado en Nextclo
 
 | Recurso | URL |
 |---------|-----|
-| Public share (file drop) | `https://enlaceschacocloud.duckdns.org/s/ojAcbHDQBTX97oD` |
+| Public share (file drop) | `$(NEXTCLOUD_SHARE_URL)` — provisto vía variable de entorno, JAMÁS commiteado |
 | WebDAV endpoint | `https://enlaceschacocloud.duckdns.org/public.php/webdav` |
 
 ## Sincronizar un Release
@@ -42,7 +42,8 @@ Auth:   Basic base64("{token}:")   — token como username, password vacío
 Ejemplo:
 
 ```powershell
-$auth = [Convert]::ToBase64String([Text.Encoding]::ASCII.GetBytes("ojAcbHDQBTX97oD:"))
+# El token se lee de la variable de entorno, nunca de un literal en el repo.
+$auth = [Convert]::ToBase64String([Text.Encoding]::ASCII.GetBytes("${env:NEXTCLOUD_TOKEN}:"))
 Invoke-WebRequest -Uri "https://enlaceschacocloud.duckdns.org/public.php/webdav/opencode_1.0.9_windows_amd64.zip" `
   -Headers @{ "Authorization" = "Basic $auth" } `
   -OutFile "opencode_1.0.9_windows_amd64.zip"

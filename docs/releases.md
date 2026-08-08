@@ -149,7 +149,7 @@ Usuario ejecuta install.bat (doble-click)
 ## Quick Links
 
 - **GitHub Releases**: <https://github.com/ivanfernadezm99/opencode/releases>
-- **Nextcloud mirror**: <https://enlaceschacocloud.duckdns.org/s/ojAcbHDQBTX97oD>
+- **Nextcloud mirror**: `$NEXTCLOUD_SHARE_URL` (env var; the share URL carries the token and is never committed)
 - **Sync script**: `./scripts/sync-to-nextcloud.sh`
 
 ---

@@ -15,7 +15,15 @@
 set -euo pipefail
 
 REPO="ivanfernadezm99/opencode"
-SHARE_URL="${NEXTCLOUD_SHARE_URL:-https://enlaceschacocloud.duckdns.org/s/ojAcbHDQBTX97oD}"
+# SECURITY (hardening): the share token is NEVER committed as a literal. Read it
+# from NEXTCLOUD_SHARE_URL (which supplies the full share URL, token included).
+# If it is missing, the script cannot authenticate and stops loudly instead of
+# embedding a credential.
+SHARE_URL="${NEXTCLOUD_SHARE_URL:-}"
+if [ -z "$SHARE_URL" ]; then
+    err "NEXTCLOUD_SHARE_URL is not set (it should point at the public file-drop share). Refusing to embed a committed token."
+    exit 1
+fi
 SHARE_TOKEN="${SHARE_URL##*/}"
 WEBDAV_BASE="https://enlaceschacocloud.duckdns.org/public.php/webdav"
 
