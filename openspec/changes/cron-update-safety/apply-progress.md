@@ -281,3 +281,49 @@ A new **runtime behavioral harness** — `.opencode/scripts/install-runtime-harn
 ### Remaining Tasks
 
 - Phase 4 (4.1): manual Windows checklist (installer-update-safety spec) — no harness. Manual Windows smoke test (backup non-empty, single cron row, simulated skills failure → restore, custom skill survival) remains outstanding on real Windows.
+
+---
+
+## Work Unit 3 — Post-Gate Hardening (fresh-context reviewer findings)
+
+After the PR3 gate PASSED (commits `579ec8b93b` + `9f1b9f7e3b` on top of `f4b152f63e`, runtime 12/12 + static 97/97), two fresh-context reviewers left 3 MATERIAL warnings, approved to fix now before pushing the 3-PR chain. STRICT TDD kept active; no regressions to round-4 fixes.
+
+**Runner (final)**: runtime harness → **12 pass / 0 fail**; static suite → **103 pass / 0 fail / 4 pre-existing warnings** (was 97; +6 new hardening asserts).
+
+| ID | Sev | Finding | Fix | RED → GREEN |
+|----|-----|---------|-----|------------|
+| SEC-1 | security | A real Nextcloud token literal was hardcoded (`$NEXTCLOUD_TOKEN = "…"` line 41) and used in Basic-auth headers (~196/338/376). A committed repo must carry NO secret. | `$NEXTCLOUD_TOKEN = if ($env:NEXTCLOUD_TOKEN) { $env:NEXTCLOUD_TOKEN } else { "<unset>" }`. Mirror paths already fail gracefully back to GitHub when auth is unusable. Also removed the same literal from `docs/nextcloud.md`, `docs/releases.md`, and `scripts/sync-to-nextcloud.sh` (that script now refuses when `NEXTCLOUD_SHARE_URL` is unset). | RED: static [SEC-1] "NEXTCLOUD_TOKEN source" failed (literal present). GREEN: env-sourced, no 32+ char literal guard added. |
+| PS51-a | warning | `Get-InstalledVersion` still did `& $BinaryPath --version 2>&1` (~261) — under EAP=Stop the first stderr line is a terminating NativeCommandError, silently forcing reinstall and bypassing the no-downgrade guard. | Routed through `Invoke-NativeRedirected` (`2>` temp, exit-gated). | RED: static [12.2] failed. GREEN: `--version` via runner; runtime P10 (widened) flags the OLD line 261, clean after. |
+| PS51-b | warning | Skill-dep `bun install` / `npm install ... 2>&1` (~1441/1446/1451) merged native stderr → npm warnings made every skill's deps log as failed and skip on PS5.1. | Replaced `2>&1` with `2>$null`; rely on `$LASTEXITCODE` alone (intent preserved via try/catch). | RED: static [12.3] failed. GREEN: no native merge. |
+| PS51-c | warning | `gentle-ai version 2>&1` (~1771) same hazard class. | Routed through `Invoke-NativeRedirected`. | RED: static [12.4] failed. GREEN: clean. |
+| P5C | warning | Runtime probe P5c was VACUOUS — `Rename-Item` succeeded (partial renamed away) so the quarantine failure path (`.incomplete` sentinel write + Restore refusal) never executed. | Forced a GENUINE rename failure: pre-create the exact quarantine destination (`$partial.incomplete-<stamp>`) as an existing FILE (dir-onto-file rename fails on Win+Unix) AND blocked the delete fallback with an exclusive lock (Windows `FileShare.None` handle) / read-only nested dir (POSIX `chmod 555`) so `Remove-Item` fails → the `.incomplete` sentinel branch must run and `Restore-Path` must refuse. | RED: old probe reported `partialExists=False` (rename succeeded → branch never ran). GREEN: `partialExists=True, sentinel=True, refuse=False` — failure path genuinely exercised. |
+| P10 | warning | P10 regex blind spots — missed `$BinaryPath`, `$gentleExe`, `bun install`, `npm install`, `cmd /c`. | Widened pattern list to those + existing `$opencodeExe/@cronArgs/taskkill/cron/dedupe`, and made it EAP-state-aware so EAP=Continue-wrapped blocks (the sole allowed `cmd /c` at ~1567) are exempt. | RED (widened, against original file): caught lines 261/1441/1446/1451/1771, correctly exempted 1567. GREEN after fix: no residual non-EAPContinued native merge. |
+| SCRUB | suggestion | Harness leaves `scratch-*` dirs under the probe TEMP dir at exit. | Added cleanup of `$env:PROBE_TEMP` at harness exit. | Verified: no `install-runtime-scratch-*` remains after a fresh run. |
+
+### TDD Cycle Evidence (post-gate hardening)
+
+| Fix | Test File | Layer | Safety Net | RED | GREEN | TRIANGULATE | REFACTOR |
+|-----|-----------|-------|------------|-----|-------|-------------|----------|
+| SEC-1 | test-installer.ps1 [12.1] | Static (regex) | ✅ 97/0 | ✅ literal present → source assert FAIL | ✅ env-sourced + 32+ literal guard | ✅ literal/absent + env path | ✅ Clean |
+| PS51-a/b/c | test-installer.ps1 [12.2-12.4] + harness P10 | Static + runtime | ✅ 97/0 + 12/12 | ✅ 3 asserts FAIL (2>&1 present) | ✅ routed/`2>$null` | ✅ each path + residual scan | ✅ Clean |
+| P5C | install-runtime-harness.ps1 P5c | Runtime (AST-exec) | ✅ 12/12 | ✅ old probe vacuous (rename succeeded) | ✅ genuine rename-fail + sentinel + refusal | ✅ dir-onto-file + locked-delete | ✅ Clean |
+| P10 | harness P10 | Runtime (whole-source scan) | ✅ 12/12 | ✅ widened scan flags 5 lines on original | ✅ 0 residual | ✅ pattern set + EAP-exemption | ✅ Clean |
+
+### Test Summary (post-gate hardening)
+
+- **Tests written (added)**: 6 static assertions (section [12]) + 1 runtime probe rewritten (P5c) + P10 pattern set widened.
+- **Total passing**: static **103 / 103** (exit 0); runtime **12 / 12** (exit 0).
+- **Secret proof**: a worktree-wide grep for the previous token literal (excluding `.git`) returned **0 matches** in tracked files. Only `git` history retains the old token (see Rotation flag). The literal string itself is intentionally not echoed here.
+- **Commit**: `ede756d2b0 fix(installer): remove hardcoded Nextcloud token, seal remaining PS5.1 stderr hazards` (post-gate hardening, on top of `9f1b9f7e3b`; no history rewrite). Untouched/untracked: two `*_windows_x64.zip` + unrelated package.json bumps.
+
+### Deviations from Design
+
+- None for the 3 findings. Additional in-scope hardening: removed the same Nextcloud token literal from tracked `docs/` + `scripts/` (SEC-1 explicitly requires "no secret anywhere in the repo, docs").
+
+### Rotation flag (for the user)
+
+The literal token is in **git history** (`ff9f48efa9` / `94e99622b1`). It MUST be **rotated at Nextcloud** (revoke/recreate the share token) — not done here. After rotation, set `NEXTCLOUD_TOKEN` (installer) / `NEXTCLOUD_SHARE_URL` (sync script) in the runtime environment.
+
+### Remaining Tasks
+
+- Phase 4 (4.1): manual Windows checklist — no harness.

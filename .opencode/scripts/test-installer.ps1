@@ -608,6 +608,77 @@ if ($bp11 -ge 0 -and $bp11End -gt $bp11) {
     else { Test-Fail "W9 empty logic" "Expected empty backup to be legitimate only when excludes were applied" }
 }
 
+# ----- [12] Post-gate hardening: no hardcoded secret, no residual PS5.1 hazard -----
+<#
+  Reviewer findings (approved BEFORE pushing the 3-PR chain):
+  - SEC-1: a real Nextcloud token literal was hardcoded and used in Basic auth
+    headers. A committed repo must carry NO secret. Read it from the env with a
+    clear placeholder fallback; add a guard so a 32+ char base64/hex-looking
+    literal can never be assigned to a token var again.
+  - PS51: under EAP=Stop on Windows PowerShell 5.1, `2>&1` merging native stderr
+    turns the first stderr line into a terminating NativeCommandError. The same
+    hazard class the PR kills (cron add/list/dedupe) still remained in
+    Get-InstalledVersion (`--version 2>&1`), bun/npm install (`2>&1`), and
+    gentle-ai `version 2>&1`. Route all through Invoke-NativeRedirected / 2>$null
+    (EAP=Continue-wrapped `cmd /c` at ~1567 is the sole allowed exception).
+#>
+Write-Host "--- [12] Post-gate hardening ---" -ForegroundColor White
+
+# [12.1] SEC-1: NEXTCLOUD_TOKEN must be env-sourced, never a hardcoded literal
+if ($content -match '\$NEXTCLOUD_TOKEN\s*=\s*if \(\$env:NEXTCLOUD_TOKEN') {
+    Test-Pass "NEXTCLOUD_TOKEN sourced from env [SEC-1]"
+} else {
+    Test-Fail "NEXTCLOUD_TOKEN source" "Expected \$NEXTCLOUD_TOKEN = if (\$env:NEXTCLOUD_TOKEN) {...} — no hardcoded credential"
+}
+$secHits = 0
+foreach ($sm in [regex]::Matches($content, '\$NEXTCLOUD_TOKEN\s*=\s*"([^"]+)"')) {
+    if ($sm.Groups[1].Value -match '^[A-Za-z0-9+/=]{32,}$') { $secHits++ }
+}
+if ($secHits -eq 0) { Test-Pass "No 32+ char secret literal in token assignment [SEC-1]" }
+else { Test-Fail "NEXTCLOUD secret literal" "$secHits 32+ char base64/hex-looking literal assigned to a token var (SECURITY). Remove it, use env var." }
+
+# [12.2] PS51: Get-InstalledVersion must not `2>&1`-merge native stderr (~261)
+#         Under EAP=Stop a merged --version stderr line is a terminating
+#         NativeCommandError; the silent fall-through forced a reinstall and
+#         bypassed the no-downgrade guard.
+if ($content -match '\$BinaryPath --version 2>&1') {
+    Test-Fail "PS51 Get-InstalledVersion" "--version merge via 2>&1 still present (silently forces reinstall / bypasses no-downgrade)"
+} else {
+    Test-Pass "Get-InstalledVersion routes --version safely [PS51]"
+}
+
+# [12.3] PS51: skill-dep bun/npm install must not merge native stderr (~1441/1446/1451)
+if ($content -match 'bun install\b[^\r\n]*2>&1' -or $content -match 'npm install\b[^\r\n]*2>&1') {
+    Test-Fail "PS51 skill deps" "bun/npm install still merges native stderr (npm stderr warnings -> every skill's deps logged failed and skipped on PS5.1)"
+} else {
+    Test-Pass "bun/npm install no 2>&1 native-stderr merge [PS51]"
+}
+
+# [12.4] PS51: gentle-ai version must not `2>&1`-merge native stderr (~1771)
+if ($content -match '\$[\w.]*gentleExe version 2>&1') {
+    Test-Fail "PS51 gentle-ai" "gentle-ai version still via 2>&1 (NativeCommandError hazard on PS5.1)"
+} else {
+    Test-Pass "gentle-ai version routed safely [PS51]"
+}
+
+# [12.5] PS51: residual `2>&1` merges of NATIVE commands under EAP=Stop are gone.
+#      A `2>&1` is only safe when the invocation is wrapped in EAP=Continue (the
+#      sole intended survivor is the `cmd /c` postinstall at ~1567). Everything
+#      else is a PS5.1 NativeCommandError hazard. Simple presence-guard: no
+#      non-comment `2>&1` may follow a `& <exe> <args>` native invocation outside
+#      an EAP=Continue block.
+$residual2and1 = @()
+for ($i = 0; $i -lt $allLines.Count; $i++) {
+    $rl = $allLines[$i]
+    if ($rl -match '^\s*#') { continue }
+    # Only flag native exe merges, not pure redirection of cmdlets / catch $_.Exception.
+    if ($rl -match '\&\s+\S+\s+[^#]*2>&1' -and $rl -notmatch '\$\.Exception' -and $rl -notmatch 'cmd /c') {
+        $residual2and1 += "line $($i+1): $($rl.Trim())"
+    }
+}
+if ($residual2and1.Count -eq 0) { Test-Pass "No residual native `2>&1` merge under EAP=Stop [PS51]" }
+else { Test-Fail "Residual native 2>&1" ($residual2and1 -join ' | ') }
+
 # ----- Summary -----
 Write-Host ""
 $total = $passed + $failed

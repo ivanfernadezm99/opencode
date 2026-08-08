@@ -38,7 +38,10 @@ $BINARY_NAME = "opencode"
 $GENTLE_NAME = "gentle-ai"
 
 $NEXTCLOUD_MIRROR = "https://enlaceschacocloud.duckdns.org/public.php/webdav"
-$NEXTCLOUD_TOKEN = "ojAcbHDQBTX97oD"
+# SECURITY: the Nextcloud token must come from the environment, never a committed
+# literal. When unset the mirror auth is simply unusable and the mirror download
+# paths fail gracefully back to GitHub — we intentionally carry NO credential.
+$NEXTCLOUD_TOKEN = if ($env:NEXTCLOUD_TOKEN) { $env:NEXTCLOUD_TOKEN } else { "<unset>" }
 $FALLBACK_VERSION = "v1.17.15"
 
 $OPENCODE_DIR = Join-Path $env:LOCALAPPDATA "opencode\bin"
@@ -258,7 +261,12 @@ function Get-InstalledVersion {
     if (-not (Test-Path $BinaryPath)) { return $null }
 
     try {
-        $ver = & $BinaryPath --version 2>&1
+        # PS5.1-safe: a `2>&1` merge under EAP=Stop turns --version's first stderr
+        # line into a terminating NativeCommandError, silently forcing a reinstall
+        # and bypassing the no-downgrade guard. Route through the stderr-to-file
+        # runner (2> to a temp file, never merged into the success pipeline).
+        $verRun = Invoke-NativeRedirected -FilePath $BinaryPath -Arguments @("--version") -Label "installed-ver"
+        $ver = $verRun.Output -join "`n"
         if ($ver -match '([\d.]+)') {
             $versionStr = $matches[1]
             Write-Info "Currently installed: v$versionStr"
@@ -1436,19 +1444,24 @@ function Main {
                         try {
                             Write-Info "     Installing dependencies for '$($_.Name)'..."
                             Push-Location $dest
-                            # Prefer bun, fall back to npm
+                            # Prefer bun, fall back to npm.
+                            # PS5.1-safe (gate-2): `2>&1` merging npm/bun stderr
+                            # under EAP=Stop turns the first stderr line (often a mere
+                            # npm warning) into a terminating NativeCommandError, so
+                            # every skill's deps got logged as failed and skipped.
+                            # Send stderr to $null; rely on $LASTEXITCODE alone.
                             if (Get-Command "bun" -ErrorAction SilentlyContinue) {
-                                $depResult = bun install --production 2>&1
+                                bun install --production 2>$null
                                 if ($LASTEXITCODE -eq 0) {
                                     Write-Success "     Dependencies installed (bun)"
                                 } else {
                                     Write-Warn "     bun install failed, trying npm..."
-                                    npm install --production --no-audit --no-fund 2>&1 | Out-Null
+                                    npm install --production --no-audit --no-fund 2>$null | Out-Null
                                     if ($LASTEXITCODE -eq 0) { Write-Success "     Dependencies installed (npm)" }
                                     else { Write-Warn "     Could not install dependencies ($($_.Name))" }
                                 }
                             } elseif (Get-Command "npm" -ErrorAction SilentlyContinue) {
-                                npm install --production --no-audit --no-fund 2>&1 | Out-Null
+                                npm install --production --no-audit --no-fund 2>$null | Out-Null
                                 if ($LASTEXITCODE -eq 0) { Write-Success "     Dependencies installed (npm)" }
                                 else { Write-Warn "     Could not install dependencies ($($_.Name))" }
                             } else {
@@ -1768,7 +1781,11 @@ function Main {
 
     if (Test-Path $gentleExe) {
         try {
-            $ver = & $gentleExe version 2>&1
+            # PS5.1-safe: `2>&1` merging `gentle-ai version` stderr under EAP=Stop
+            # becomes a terminating NativeCommandError. Capture both streams via
+            # the stderr-to-file runner; never merge into the success pipeline.
+            $verRun = Invoke-NativeRedirected -FilePath $gentleExe -Arguments @("version") -Label "verify-gentle"
+            $ver = $verRun.Output -join "`n"
             Write-Success "gentle-ai: $ver"
         } catch {
             Write-Warn "Could not verify gentle-ai version"

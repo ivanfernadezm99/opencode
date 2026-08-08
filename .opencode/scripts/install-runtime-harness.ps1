@@ -198,16 +198,40 @@ try { $bp5b = Backup-Path -Src $srcGood -Dst $badDst } catch { $threw5b = $true 
 $ok5b = $threw5b -and (-not (Test-Path (Join-Path $badDst '.backup-complete')))
 Record 'P5b-copy-fail' $(if ($ok5b) {1} else {0}) "threw=$threw5b markerAbsent=$(-not (Test-Path (Join-Path $badDst '.backup-complete')))"
 
-# rename-fail quarantine: pre-create the quarantine target is NOT a real failure
-# (PowerShell Rename-Item *does* replace an existing path). To force a genuine
-# rename failure we instead NEST a live file so the rename cannot succeed.
+# rename-FAIL quarantine (B1a failure path): force BOTH the rename to fail AND
+# the delete fallback to fail, so Quarantine-PartialBackup's catch must write the
+# `.incomplete` sentinel and Restore-Path must refuse. (Post-gate hardening —
+# the prior probe let Rename-Item succeed, so the sentinel branch never ran.)
+#   - Make the rename fail: pre-create the quarantine destination
+#     "$partial.incomplete-$stamp" as an existing FILE. Rename-Item cannot move a
+#     directory onto an existing file of a different type (fails on Win + Unix).
+#   - Make the delete fail: hold an exclusive lock / read-only nested subdir so
+#     Remove-Item -Recurse cannot clear it, forcing the sentinel-write branch.
 $partial = Join-Path $scratch 'partialDir'; Reset-Dir $partial
 'x' | Set-Content (Join-Path $partial 'x.db')
+# Block the rename: pre-create the exact quarantine destination as an ordinary file.
+$quakeDst = "$partial.incomplete-$script:backupStamp"
+'collision' | Set-Content $quakeDst
+# Block the delete fallback: a nested subdir the removal cannot empty.
+$frozen = Join-Path $partial 'frozen'; New-Item -ItemType Directory -Path $frozen -Force | Out-Null
+'lockfile' | Set-Content (Join-Path $frozen 'lock.db')
+$lockStream = $null
+if ($sh -eq '/bin/sh') {
+    # POSIX: an unwritable nested dir makes Remove-Item -Recurse fail on contents.
+    & chmod 555 $frozen | Out-Null
+} else {
+    # Windows: hold an exclusive open handle on the nested file so delete fails.
+    $lockStream = [System.IO.File]::Open((Join-Path $frozen 'lock.db'), 'Open', 'ReadWrite', [System.IO.FileShare]::None)
+}
 $qRes = Quarantine-PartialBackup -Dst $partial
+if ($null -ne $lockStream) { $lockStream.Dispose(); $lockStream = $null }
+if ($sh -eq '/bin/sh') { & chmod 755 $frozen 2>$null }
 $partialRemains = Test-Path $partial
-$sentinel = if ($partialRemains) { Test-Path (Join-Path $partial '.incomplete') } else { $true }
+$sentinel = if ($partialRemains) { Test-Path (Join-Path $partial '.incomplete') } else { $false }
 $refuse = Restore-Path -Backup $partial -Target (Join-Path $scratch 'qtarget')
-$ok5c = ($qRes -eq $true) -and $sentinel -and ($refuse -eq $false)
+# The failure path must write the sentinel AND Restore must refuse (never restore
+# a partial that physically survived quarantine).
+$ok5c = ($qRes -eq $true) -and $partialRemains -and $sentinel -and ($refuse -eq $false)
 Record 'P5c-rename-fail' $(if ($ok5c) {1} else {0}) "quarantine=$qRes partialExists=$partialRemains sentinel=$sentinel refuse=$refuse"
 
 # --- P6: sidecar purge safety --------------------------------------------------
@@ -311,24 +335,39 @@ if (Test-Path $outTxt) {
 
 # ----------------------------------------------------------------------------
 # P10: native-stderr hazard scan (static, whole source). Must flag ANY
-# remaining `2>&1` merge of a NATIVE command under EAP=Stop for the cron / exe
-# paths. `$_.Exception` and non-native (cmd builtin) lines are excluded.
+# remaining `2>&1` merge of a NATIVE command under EAP=Stop for the cron/exe/
+# BinaryPath/gentleExe/bun/npm paths. Widen the pattern list to the same class
+# the PR kills, and EXCLUDE blocks that force EAP=Continue around the invocation
+# (the `cmd /c` postinstall is EAP=Continue-wrapped, so it is exempt).
 # ----------------------------------------------------------------------------
 $haz = @()
 $lines = $sourceText -split "`n"
+$inEAPContinue = $false
 for ($i = 0; $i -lt $lines.Count; $i++) {
     $ln = $lines[$i]
+    # Track EAP state so EAP=Continue-wrapped natives are exempt. The script sets
+    # EAP=Continue for the postinstall cmd /c and restores $prevEA in finally.
+    if ($ln -match '\$ErrorActionPreference\s*=\s*"Continue"') { $inEAPContinue = $true }
+    elseif ($ln -match '\$ErrorActionPreference\s*=\s*\$prev[EA]|\$ErrorActionPreference\s*=\s*"Stop"') { $inEAPContinue = $false }
     if ($ln -match '^\s*#') { continue }          # comments document, never execute
     if ($ln -match '2>&1' -and $ln -notmatch '\$\.Exception') {
-        # Flag only ACTIVE native invocations that merge stderr under EAP=Stop for
-        # the cron/dedupe/taskkill/exe paths (the PS5.1 NativeCommandError hazard).
-        if ($ln -match '\$opencodeExe|@cronArgs|taskkill|\bcron\b|\bdedupe\b') {
-            $haz += "line $($i+1): $($ln.Trim())"
+        # Native invocations that merge stderr under EAP=Stop -> PS5.1
+        # NativeCommandError. Only flag them when NOT inside an EAP=Continue block.
+        if (-not $inEAPContinue) {
+            if ($ln -match '\$opencodeExe|@cronArgs|taskkill|\bcron\b|\bdedupe\b|\$BinaryPath|\$gentleExe|\bbun install\b|\bnpm install\b|\bcmd /c\b') {
+                $haz += "line $($i+1): $($ln.Trim())"
+            }
         }
     }
 }
-if ($haz.Count -eq 0) { T -N 'P10-native-hazard' -Pass:$true "no residual 2>&1 merge of native stderr" }
+if ($haz.Count -eq 0) { T -N 'P10-native-hazard' -Pass:$true "no residual non-EAPContinued 2>&1 merge of native stderr" }
 else { T -N 'P10-native-hazard' -Pass:$false ($haz -join ' | ') }
+
+# Clean up the scratch dirs the probe leaves under the probe TEMP dir (reviewer
+# suggestion). Also the results/body scripts live there; remove the scratch tree.
+if (Test-Path $env:PROBE_TEMP) {
+    Remove-Item $env:PROBE_TEMP -Recurse -Force -ErrorAction SilentlyContinue
+}
 
 if ($KeepInner) { Write-Host "inner probe kept at: $innerFile" -ForegroundColor DarkGray }
 # P10 lives in the parent; the child only runs P1-P9. Report child timestamps too.
