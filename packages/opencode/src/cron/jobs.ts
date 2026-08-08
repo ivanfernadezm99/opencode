@@ -1,7 +1,7 @@
 import { Database } from "@opencode-ai/core/database/database"
 import { CronJobTable } from "@opencode-ai/core/cron/cron-job.sql"
-import { and, eq, lte, sql } from "drizzle-orm"
-import { Context, Effect, Layer, Schema } from "effect"
+import { and, eq, isNull, lte, sql } from "drizzle-orm"
+import { Context, Effect, Exit, Layer, Schema } from "effect"
 import * as CronParser from "cron-parser"
 
 // ─── Schema Types ───────────────────────────────────────────────────────────
@@ -150,6 +150,7 @@ export interface Interface {
   readonly remove: (id: string) => Effect.Effect<void, CronJobServiceError>
   readonly getDueJobs: () => Effect.Effect<CronJob[], CronJobServiceError>
   readonly advanceNextRun: (id: string) => Effect.Effect<CronJob, CronJobServiceError>
+  readonly backfillNextRuns: () => Effect.Effect<number, CronJobServiceError>
   readonly markJobRun: (id: string, status: string, error?: string) => Effect.Effect<void, CronJobServiceError>
   readonly markRunning: (id: string) => Effect.Effect<void, CronJobServiceError>
 }
@@ -199,18 +200,28 @@ export const layer = Layer.effect(
         Effect.gen(function* () {
           const id = crypto.randomUUID()
           const time = now()
+          const enabled = input.enabled ?? 1
+          let nextRunAt: number | undefined = input.next_run_at ?? undefined
+          // Compute when omitted/explicit-null AND enabled; persist ONLY if strictly in the future (D4/R3r)
+          if (nextRunAt == null && enabled !== 0) {
+            const computed = computeNextRun({
+              schedule_kind: input.schedule_kind,
+              schedule_expr: input.schedule_expr,
+            })
+            if (computed && computed.getTime() > time) nextRunAt = computed.getTime()
+          }
           const values: typeof CronJobTable.$inferInsert = {
             id,
             prompt: input.prompt,
             schedule_kind: input.schedule_kind,
             schedule_expr: input.schedule_expr,
             name: input.name ?? undefined,
-            enabled: input.enabled ?? 1,
+            enabled,
             model: input.model ?? undefined,
             skills: input.skills ?? undefined,
             workdir: input.workdir ?? undefined,
             repeat_times: input.repeat_times ?? undefined,
-            next_run_at: input.next_run_at ?? undefined,
+            next_run_at: nextRunAt,
             notify: input.notify ?? 0,
             time_created: time,
             time_updated: time,
@@ -288,6 +299,34 @@ export const layer = Layer.effect(
       ),
     )
 
+    const backfillNextRuns = Effect.fn("CronJobs.backfillNextRuns")(() =>
+      mapError(
+        Effect.gen(function* () {
+          const rows = yield* db
+            .select()
+            .from(CronJobTable)
+            .where(and(eq(CronJobTable.enabled, 1), isNull(CronJobTable.next_run_at)))
+            .all()
+            .pipe(Effect.orDie)
+          let healed = 0
+          for (const row of rows) {
+            const computed = computeNextRun(row, new Date())
+            if (!computed || computed.getTime() <= now()) continue
+            // Per-row failure is isolated so one bad row never aborts the backfill,
+            // and only a row whose UPDATE actually succeeded counts as healed (F3).
+            const exit = yield* db
+              .update(CronJobTable)
+              .set({ next_run_at: computed.getTime(), time_updated: now() })
+              .where(eq(CronJobTable.id, row.id))
+              .run()
+              .pipe(Effect.orDie, Effect.exit)
+            if (Exit.isSuccess(exit)) healed += 1
+          }
+          return healed
+        }),
+      ),
+    )
+
     const advanceNextRun = Effect.fn("CronJobs.advanceNextRun")((id: string) =>
       mapError(
         Effect.gen(function* () {
@@ -298,11 +337,25 @@ export const layer = Layer.effect(
               return r
             }),
           )
-          const nextDate = computeNextRun(row, new Date())
-          const nextRun = nextDate ? nextDate.getTime() : null
-          yield* db.update(CronJobTable).set({ next_run_at: nextRun, time_updated: now() }).where(
-            eq(CronJobTable.id, id),
-          ).run().pipe(Effect.orDie)
+          const nowMs = now()
+          const computed = computeNextRun(row, new Date(nowMs))
+          if (computed && computed.getTime() > nowMs) {
+            // strictly future → persist the advanced value (at-most-once)
+            yield* db.update(CronJobTable).set({ next_run_at: computed.getTime(), time_updated: nowMs }).where(
+              eq(CronJobTable.id, id),
+            ).run().pipe(Effect.orDie)
+          } else if (row.schedule_kind === "once") {
+            // once-expired → mark done, never persist a past value (D11)
+            yield* db.update(CronJobTable).set({ enabled: 0, state: "completed", time_updated: nowMs }).where(
+              eq(CronJobTable.id, id),
+            ).run().pipe(Effect.orDie)
+          } else {
+            // recurring-invalid → disable + log, no hot due-loop
+            yield* Effect.logError("Cron advanceNextRun: cannot advance", row)
+            yield* db.update(CronJobTable).set({ enabled: 0, state: "error", time_updated: nowMs }).where(
+              eq(CronJobTable.id, id),
+            ).run().pipe(Effect.orDie)
+          }
           const updated = yield* db.select().from(CronJobTable).where(eq(CronJobTable.id, id)).get().pipe(
             Effect.orDie,
             Effect.map((r) => r!),
@@ -361,6 +414,7 @@ export const layer = Layer.effect(
       remove,
       getDueJobs,
       advanceNextRun,
+      backfillNextRuns,
       markJobRun,
       markRunning,
     })

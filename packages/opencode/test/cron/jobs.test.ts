@@ -30,6 +30,7 @@ function createTestDb() {
       workdir text,
       repeat_times integer,
       repeat_done integer NOT NULL DEFAULT 0,
+      notify integer NOT NULL DEFAULT 0,
       time_created integer NOT NULL,
       time_updated integer NOT NULL
     )
@@ -301,8 +302,8 @@ describe("computeGraceMs", () => {
 })
 
 describe("CronJobs service", () => {
-  const providerLayer = Layer.mergeAll(CoreDatabase.layerFromPath(":memory:"))
-  const testLayer = CronJobs.defaultLayer.pipe(Layer.provide(providerLayer)) as Layer.Layer<CronJobs.Service>
+  const providerLayer = CoreDatabase.layerFromPath(":memory:")
+  const testLayer = Layer.provideMerge(CronJobs.layer, providerLayer) as Layer.Layer<CronJobs.Service>
   const it = testEffect(testLayer)
 
   it.live("create inserts a job and returns it", () =>
@@ -320,6 +321,72 @@ describe("CronJobs service", () => {
       expect(job.enabled).toBe(1)
       expect(job.state).toBe("scheduled")
       expect(job.repeat_done).toBe(0)
+    }),
+  )
+
+  it.live("create without next_run_at computes a future non-NULL value for an enabled job", () =>
+    Effect.gen(function* () {
+      const svc = yield* CronJobs.Service
+      const before = Date.now()
+      const job = yield* svc.create({
+        prompt: "future compute",
+        schedule_kind: "interval",
+        schedule_expr: "3600",
+      })
+      expect(job.next_run_at).not.toBeNull()
+      // computeNextRun(interval "3600") = base + 3600s, strictly in the future
+      expect(job.next_run_at!).toBeGreaterThan(before)
+    }),
+  )
+
+  it.live("create with a past computed value stores NULL", () =>
+    Effect.gen(function* () {
+      const svc = yield* CronJobs.Service
+      // once schedule already passed → computeNextRun returns a past Date
+      const job = yield* svc.create({
+        prompt: "past once",
+        schedule_kind: "once",
+        schedule_expr: "2020-01-01T00:00:00.000Z",
+      })
+      expect(job.next_run_at).toBeNull()
+    }),
+  )
+
+  it.live("create with invalid expression stores NULL", () =>
+    Effect.gen(function* () {
+      const svc = yield* CronJobs.Service
+      const job = yield* svc.create({
+        prompt: "invalid expr",
+        schedule_kind: "cron",
+        schedule_expr: "not-a-cron",
+      })
+      expect(job.next_run_at).toBeNull()
+    }),
+  )
+
+  it.live("create respects an explicit next_run_at", () =>
+    Effect.gen(function* () {
+      const svc = yield* CronJobs.Service
+      const job = yield* svc.create({
+        prompt: "explicit",
+        schedule_kind: "interval",
+        schedule_expr: "3600",
+        next_run_at: 1700000000000,
+      })
+      expect(job.next_run_at).toBe(1700000000000)
+    }),
+  )
+
+  it.live("create with enabled=0 stores NULL (no computation)", () =>
+    Effect.gen(function* () {
+      const svc = yield* CronJobs.Service
+      const job = yield* svc.create({
+        prompt: "disabled",
+        schedule_kind: "interval",
+        schedule_expr: "3600",
+        enabled: 0,
+      })
+      expect(job.next_run_at).toBeNull()
     }),
   )
 
@@ -494,6 +561,247 @@ describe("CronJobs service", () => {
       expect(job!.last_status).toBe("error")
       expect(job!.last_error).toBe("timeout")
       expect(job!.state).toBe("error")
+    }),
+  )
+
+  it.live("backfill heals an enabled job with NULL next_run_at", () =>
+    Effect.gen(function* () {
+      const svc = yield* CronJobs.Service
+      const db = yield* CoreDatabase.Service
+      const id = crypto.randomUUID()
+      const time = Date.now()
+      yield* db.db
+        .insert(CronJobTable)
+        .values({
+          id,
+          prompt: "backfill me",
+          schedule_kind: "interval",
+          schedule_expr: "3600",
+          enabled: 1,
+          state: "scheduled",
+          time_created: time,
+          time_updated: time,
+        })
+        .run()
+        .pipe(Effect.orDie)
+      const healed = yield* svc.backfillNextRuns()
+      expect(healed).toBe(1)
+      const job = yield* svc.get(id)
+      expect(job).not.toBeNull()
+      expect(job!.next_run_at).not.toBeNull()
+      expect(job!.next_run_at!).toBeGreaterThan(time)
+    }),
+  )
+
+  it.live("backfill is idempotent and never changes an already-healed value", () =>
+    Effect.gen(function* () {
+      const svc = yield* CronJobs.Service
+      const db = yield* CoreDatabase.Service
+      const id = crypto.randomUUID()
+      const time = Date.now()
+      yield* db.db
+        .insert(CronJobTable)
+        .values({
+          id,
+          prompt: "idempotent",
+          schedule_kind: "interval",
+          schedule_expr: "3600",
+          enabled: 1,
+          state: "scheduled",
+          time_created: time,
+          time_updated: time,
+        })
+        .run()
+        .pipe(Effect.orDie)
+      expect(yield* svc.backfillNextRuns()).toBe(1)
+      const firstHealed = (yield* svc.get(id))!.next_run_at
+      // Second run heals nothing
+      expect(yield* svc.backfillNextRuns()).toBe(0)
+      const secondHealed = (yield* svc.get(id))!.next_run_at
+      expect(secondHealed).toBe(firstHealed)
+    }),
+  )
+
+  it.live("backfill leaves disabled, invalid, and once-expired jobs NULL and heals a valid sibling", () =>
+    Effect.gen(function* () {
+      const svc = yield* CronJobs.Service
+      const db = yield* CoreDatabase.Service
+      const time = Date.now()
+      const seed = (id: string, overrides: Partial<typeof CronJobTable.$inferInsert>) =>
+        db.db
+          .insert(CronJobTable)
+          .values({
+            id,
+            prompt: `job ${id}`,
+            schedule_kind: "interval",
+            schedule_expr: "3600",
+            enabled: 1,
+            state: "scheduled",
+            time_created: time,
+            time_updated: time,
+            ...overrides,
+          })
+          .run()
+          .pipe(Effect.orDie)
+      // disabled
+      yield* seed("disabled", { enabled: 0 })
+      // enabled but invalid expression
+      yield* seed("invalid", { schedule_kind: "cron", schedule_expr: "not-a-cron" })
+      // enabled once-expired
+      yield* seed("expired", { schedule_kind: "once", schedule_expr: "2020-01-01T00:00:00.000Z" })
+      // valid enabled sibling that SHOULD heal
+      yield* seed("valid", {})
+      const healed = yield* svc.backfillNextRuns()
+      expect(healed).toBe(1)
+      for (const bad of ["disabled", "invalid", "expired"]) {
+        const job = yield* svc.get(bad)
+        expect(job!.next_run_at).toBeNull()
+      }
+      const valid = yield* svc.get("valid")
+      expect(valid!.next_run_at).not.toBeNull()
+    }),
+  )
+
+  it.live("backfill does not count a row whose UPDATE fails, but still heals surviving siblings", () =>
+    Effect.gen(function* () {
+      const svc = yield* CronJobs.Service
+      const db = yield* CoreDatabase.Service
+      const time = Date.now()
+      const seed = (id: string) =>
+        db.db
+          .insert(CronJobTable)
+          .values({
+            id,
+            prompt: `job ${id}`,
+            schedule_kind: "interval",
+            schedule_expr: "3600",
+            enabled: 1,
+            state: "scheduled",
+            time_created: time,
+            time_updated: time,
+          })
+          .run()
+          .pipe(Effect.orDie)
+      // Force a real per-row UPDATE failure for one specific id via a SQLite trigger,
+      // so the row's heal path dies while every other row heals normally (isolation).
+      yield* db.db
+        .run(sql`CREATE TRIGGER fail_row BEFORE UPDATE OF next_run_at ON cron_job
+          WHEN NEW.id = 'failme' BEGIN SELECT RAISE(FAIL, 'forced per-row update failure'); END`)
+        .pipe(Effect.orDie)
+      yield* seed("failme")
+      yield* seed("survivor")
+
+      const healed = yield* svc.backfillNextRuns()
+      // The failed row must NOT be reported as healed; only the surviving sibling counts.
+      expect(healed).toBe(1)
+
+      const survivor = yield* svc.get("survivor")
+      expect(survivor).not.toBeNull()
+      expect(survivor!.next_run_at).not.toBeNull()
+      const failed = yield* svc.get("failme")
+      expect(failed).not.toBeNull()
+      expect(failed!.next_run_at).toBeNull()
+    }),
+  )
+
+  it.live("advanceNextRun marks an expired once job done so it never double-fires", () =>
+    Effect.gen(function* () {
+      const svc = yield* CronJobs.Service
+      const now = Date.now()
+      const created = yield* svc.create({
+        prompt: "once double-fire",
+        schedule_kind: "once",
+        schedule_expr: "2020-01-01T00:00:00.000Z",
+        next_run_at: now - 1000, // already due
+      })
+      // First tick: advanceNextRun should mark done (not persist a past value)
+      const advanced = yield* svc.advanceNextRun(created.id)
+      expect(advanced.enabled).toBe(0)
+      expect(advanced.state).toBe("completed")
+      // Second tick: job must not be due again
+      const due = yield* svc.getDueJobs()
+      expect(due.some((j) => j.id === created.id)).toBe(false)
+    }),
+  )
+
+  it.live("advanceNextRun persists only a strictly-future value for a recurring job", () =>
+    Effect.gen(function* () {
+      const svc = yield* CronJobs.Service
+      const created = yield* svc.create({
+        prompt: "recurring future",
+        schedule_kind: "interval",
+        schedule_expr: "3600",
+        next_run_at: Date.now() - 1000, // due
+      })
+      const before = Date.now()
+      const advanced = yield* svc.advanceNextRun(created.id)
+      expect(advanced.next_run_at).not.toBeNull()
+      expect(advanced.next_run_at!).toBeGreaterThan(before) // strictly future, never past
+      expect(advanced.enabled).toBe(1)
+    }),
+  )
+
+  it.live("advanceNextRun disables and errors a recurring job with an invalid expression", () =>
+    Effect.gen(function* () {
+      const svc = yield* CronJobs.Service
+      // A recurring (non-once) job whose expression cannot be advanced stays due forever
+      // unless advanceNextRun disables it — otherwise the ticker spins on it every 60s.
+      const created = yield* svc.create({
+        prompt: "recurring invalid",
+        schedule_kind: "cron",
+        schedule_expr: "not-a-cron",
+        next_run_at: Date.now() - 1000, // due
+      })
+      const advanced = yield* svc.advanceNextRun(created.id)
+      expect(advanced.enabled).toBe(0)
+      expect(advanced.state).toBe("error")
+      // No longer due — the ticker stops spinning on it every 60s
+      const due = yield* svc.getDueJobs()
+      expect(due.some((j) => j.id === created.id)).toBe(false)
+    }),
+  )
+
+  it.live("advanceNextRun failure on a removed job is caught by catchCause and loop continues", () =>
+    Effect.gen(function* () {
+      const svc = yield* CronJobs.Service
+      const db = yield* CoreDatabase.Service
+      const time = Date.now()
+      const seed = (id: string) =>
+        db.db
+          .insert(CronJobTable)
+          .values({
+            id,
+            prompt: `job ${id}`,
+            schedule_kind: "interval",
+            schedule_expr: "3600",
+            enabled: 1,
+            state: "scheduled",
+            next_run_at: time - 1000,
+            time_created: time,
+            time_updated: time,
+          })
+          .run()
+          .pipe(Effect.orDie)
+      // Two due jobs; one will be removed mid-loop (simulating concurrent deletion)
+      yield* seed("removed")
+      yield* seed("survivor")
+
+      // Production loop: getDueJobs → advanceNextRun (catchCause) → execute
+      const due = yield* svc.getDueJobs()
+      expect(due.map((j) => j.id).sort()).toEqual(["removed", "survivor"])
+      for (const job of due) {
+        if (job.id === "removed") {
+          yield* svc.remove("removed")
+        }
+        // Wrapped in catchCause so the sync-throw DEFECT never kills the loop/fiber
+        yield* svc.advanceNextRun(job.id).pipe(
+          Effect.catchCause((cause) => Effect.logError("Cron advanceNextRun failed", cause)),
+        )
+      }
+      // Survivor was advanced (real work ran) — proof the loop continued past the failure
+      const survivor = yield* svc.get("survivor")
+      expect(survivor).not.toBeNull()
+      expect(survivor!.next_run_at).not.toBeNull()
     }),
   )
 })
