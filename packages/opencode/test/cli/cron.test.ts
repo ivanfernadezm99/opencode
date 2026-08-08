@@ -1,6 +1,10 @@
 import { describe, expect, test } from "bun:test"
+import { Effect, Layer } from "effect"
 import { CronJobs } from "../../src/cron/jobs"
-import { detectScheduleKind, formatJobStatus, formatJobTable } from "../../src/cli/cron"
+import { detectScheduleKind, formatJobStatus, formatJobTable, dedupe } from "../../src/cli/cron"
+import { Database as CoreDatabase } from "@opencode-ai/core/database/database"
+import { CronJobTable } from "@opencode-ai/core/cron/cron-job.sql"
+import { testEffect } from "../lib/effect"
 
 function makeJob(overrides: Partial<CronJobs.CronJob> = {}): CronJobs.CronJob {
   const now = Date.now()
@@ -117,4 +121,111 @@ describe("formatJobStatus", () => {
     const result = formatJobStatus(job)
     expect(result).toContain("2/5")
   })
+})
+
+describe("dedupe", () => {
+  const providerLayer = CoreDatabase.layerFromPath(":memory:")
+  const testLayer = Layer.provideMerge(CronJobs.layer, providerLayer) as Layer.Layer<CronJobs.Service>
+  const it = testEffect(testLayer)
+
+  const seed = (db: CoreDatabase.Database, id: string, name: string | null, time_created: number) =>
+    db.db
+      .insert(CronJobTable)
+      .values({
+        id,
+        name,
+        prompt: "test prompt",
+        schedule_kind: "interval",
+        schedule_expr: "3600",
+        enabled: 1,
+        state: "scheduled",
+        time_created,
+        time_updated: time_created,
+      })
+      .run()
+      .pipe(Effect.orDie)
+
+  it.live("keeps the earliest time_created and removes later same-name duplicates", () =>
+    Effect.gen(function* () {
+      const db = yield* CoreDatabase.Service
+      const svc = yield* CronJobs.Service
+      const now = Date.now()
+      yield* seed(db, "earliest", "Recordatorio cargar horas Redmine", now - 10_000)
+      yield* seed(db, "later", "Recordatorio cargar horas Redmine", now - 5_000)
+
+      const result = yield* dedupe()
+
+      expect(result.removed).toBe(1)
+      expect(result.kept).toBe(1)
+      expect(result.skippedNull).toBe(0)
+      const kept = yield* svc.get("earliest")
+      expect(kept).not.toBeNull()
+      const removed = yield* svc.get("later")
+      expect(removed).toBeNull()
+    }),
+  )
+
+  it.live("removes later same-name duplicates case-insensitively", () =>
+    Effect.gen(function* () {
+      const db = yield* CoreDatabase.Service
+      const svc = yield* CronJobs.Service
+      const now = Date.now()
+      yield* seed(db, "first", "Recordatorio cargar horas Redmine", now - 10_000)
+      yield* seed(db, "second", "recordatorio CARGAR HORAS redmine", now - 5_000)
+      yield* seed(db, "third", "RECORDATORIO Cargar Horas Redmine", now - 1_000)
+
+      const result = yield* dedupe()
+
+      expect(result.removed).toBe(2)
+      expect(result.kept).toBe(1)
+      expect(result.skippedNull).toBe(0)
+      const kept = yield* svc.get("first")
+      expect(kept).not.toBeNull()
+      expect((yield* svc.get("second"))).toBeNull()
+      expect((yield* svc.get("third"))).toBeNull()
+    }),
+  )
+
+  it.live("skips NULL-named jobs entirely and never groups them", () =>
+    Effect.gen(function* () {
+      const db = yield* CoreDatabase.Service
+      const svc = yield* CronJobs.Service
+      const now = Date.now()
+      // Two NULL-named jobs must be skipped (never grouped/removed)
+      yield* seed(db, "null1", null, now - 10_000)
+      yield* seed(db, "null2", null, now - 5_000)
+      // A named duplicate pair that SHOULD collapse
+      yield* seed(db, "named-earliest", "My Job", now - 10_000)
+      yield* seed(db, "named-later", "my job", now - 5_000)
+
+      const result = yield* dedupe()
+
+      // Only the named pair collapsed; the two NULL-named jobs are untouched
+      expect(result.removed).toBe(1)
+      expect(result.kept).toBe(1)
+      expect(result.skippedNull).toBe(2)
+      expect((yield* svc.get("null1"))).not.toBeNull()
+      expect((yield* svc.get("null2"))).not.toBeNull()
+      expect((yield* svc.get("named-earliest"))).not.toBeNull()
+      expect((yield* svc.get("named-later"))).toBeNull()
+    }),
+  )
+
+  it.live("fresh DB with no duplicates removes nothing", () =>
+    Effect.gen(function* () {
+      const db = yield* CoreDatabase.Service
+      const svc = yield* CronJobs.Service
+      const now = Date.now()
+      yield* seed(db, "a", "Job A", now - 10_000)
+      yield* seed(db, "b", "Job B", now - 5_000)
+
+      const result = yield* dedupe()
+
+      expect(result.removed).toBe(0)
+      expect(result.kept).toBe(2)
+      expect(result.skippedNull).toBe(0)
+      expect((yield* svc.get("a"))).not.toBeNull()
+      expect((yield* svc.get("b"))).not.toBeNull()
+    }),
+  )
 })
