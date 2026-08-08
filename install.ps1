@@ -726,7 +726,18 @@ function Invoke-NativeRedirected {
         $stderrText = $_.Exception.Message
     } finally {
         if (Test-Path $errTmp) {
-            if (-not $stderrText) { $stderrText = (Get-Content $errTmp -Raw -ErrorAction SilentlyContinue).Trim() }
+            # Round-3 BLOCKER: on an EMPTY temp file (the common case — cron list /
+            # cron add write stdout only, non-empty) `Get-Content -Raw` returns $null
+            # and calling `.Trim()` on it throws in the FINALLY, whose exception the
+            # function's own try/catch does NOT catch — it propagated out and crashed
+            # the happy-path restore. Guard with an explicit null check (PS 5.1-safe;
+            # never rely on Get-Content -Raw for empty files).
+            if (-not $stderrText) {
+                $rawStderr = Get-Content $errTmp -Raw -ErrorAction SilentlyContinue
+                if ($null -ne $rawStderr -and [string]::IsNullOrWhiteSpace([string]$rawStderr) -eq $false) {
+                    $stderrText = ([string]$rawStderr).Trim()
+                }
+            }
             Remove-Item -Path $errTmp -Force -ErrorAction SilentlyContinue
         }
     }
@@ -744,11 +755,27 @@ function Test-CronJobNameExists {
     foreach ($line in $ListLines) {
         if ([string]::IsNullOrWhiteSpace($line)) { continue }
         if ($line -match "^(No cron jobs found|ID)" -or $line -match "^\S+\s+─") { continue }
-        # ID column is 40 wide; NAME starts at column 41. Extract the full name
-        # cell, then compare exactly (trimmed).
+        # REAL layout (cron.ts formatJob): `ID${shortId.padEnd(40)} NAME ...` —
+        # the ID column is 40 wide (indices 0-39), index 40 is a single literal
+        # space SEPARATOR, and the NAME cell starts at index 41, formatted as
+        # `name.padEnd(18)` (so names >18 chars overflow verbatim).
+        #   - Short names: the 18-char field holds name + pad spaces.
+        #   - Long names (>18): padEnd leaves them un-padded, so the full name is
+        #     present verbatim (multi-word names like the manifest one must match
+        #     exactly, never truncated to a single word / prefix).
+        # The old `Substring(40)` started AT the separator and then ran the whole
+        # remainder (name+schedule+nextRun+state) through .Trim() — it could never
+        # equal the bare name, so Test-CronJobNameExists NEVER matched (round-3
+        # CRITICAL). Extract the padded 18-char cell and TrimEnd; for a name longer
+        # than 18 the cell is the full name (PadEnd is a no-op when already longer).
         if ($line.Length -ge 41) {
-            $nameCell = $line.Substring(40).Trim()
-            if ($nameCell -ceq $Name -or $nameCell -ieq $Name) { return $true }
+            $fieldWidth = [Math]::Max($Name.Length, 18)
+            $cellStart = 41
+            $cellLen = [Math]::Min($fieldWidth, $line.Length - $cellStart)
+            if ($cellLen -gt 0) {
+                $nameCell = $line.Substring($cellStart, $cellLen).TrimEnd()
+                if ($nameCell -ceq $Name -or $nameCell -ieq $Name) { return $true }
+            }
         }
     }
     return $false
@@ -1725,8 +1752,15 @@ function Main {
     $opencodeExe = Join-Path $OPENCODE_DIR "opencode.exe"
     if (Test-Path $opencodeExe) {
         try {
-            $ver = & $opencodeExe --version 2>&1
-            Write-Success "opencode: $ver"
+            # Route through the PS5.1-safe runner: a `2>&1` merge under EAP=Stop
+            # can turn --version's stdout/stderr into a terminating error on the
+            # exe path. The runner captures both streams and never merges them.
+            $verRun = Invoke-NativeRedirected -FilePath $opencodeExe -Arguments @("--version") -Label "verify-opencode"
+            if ($verRun.ExitCode -eq 0) {
+                Write-Success "opencode: $($verRun.Output -join ' ')"
+            } else {
+                Write-Warn "opencode --version exited $($verRun.ExitCode)"
+            }
         } catch {
             Write-Warn "Could not verify opencode version"
         }
