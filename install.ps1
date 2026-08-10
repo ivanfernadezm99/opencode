@@ -1435,6 +1435,18 @@ function Main {
                     # wildcard (no nesting) so a user-created skill is never wiped.
                     if (Test-Path $dest) {
                         Copy-Item -Path $dest "$dest.backup-$script:backupStamp" -Recurse -Force -ErrorAction Stop
+                        if (-not (Get-Item $dest).PSIsContainer) {
+                            # Corrupt flat FILE left by pre-fix copies; preserved in
+                            # the backup above, so drop the leaf and rebuild as a dir.
+                            Remove-Item -Path $dest -Force -ErrorAction Stop
+                        }
+                    }
+                    if (-not (Test-Path $dest)) {
+                        # Ensure dest is a DIRECTORY before the wildcard copy. With
+                        # -Exclude, Copy-Item creates an absent dest as a FILE from
+                        # the first child, then "container into leaf" on dir children
+                        # (and flat skills stay files). Pre-creating the dir fixes both.
+                        New-Item -ItemType Directory -Path $dest -Force | Out-Null
                     }
                     Copy-Item -Path "$($_.FullName)\*" -Destination $dest -Recurse -Force -Exclude "node_modules" -ErrorAction Stop
                     Write-Success "  Skill '$($_.Name)' installed"
