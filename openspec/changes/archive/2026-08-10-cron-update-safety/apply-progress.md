@@ -326,4 +326,47 @@ The literal token is in **git history** (`ff9f48efa9` / `94e99622b1`). It MUST b
 
 ### Remaining Tasks
 
-- Phase 4 (4.1): manual Windows checklist — no harness.
+- ~~Phase 4 (4.1): manual Windows checklist — no harness~~ → **COMPLETED 2026-08-10**. See "Phase 4 — Windows checklist closure" below.
+
+---
+
+## Phase 4 — Windows checklist closure
+
+**Task**: 4.1 (manual Windows checklist, installer-update-safety spec). No harness by design.
+
+**Result**: PASS — all four checklist items verified on the real Windows client (`ivan@100.119.47.58`, `DESKTOP-OAPB9PB`) with the fork build containing the cron + installer fixes (`opencode.exe 0.0.0-dev-202608101302`, sha256 `23083C843B3A22EB6BDCD550F492C2D12C6A2CD3DD7384A2E5F36ED810DCFA9B`) installed via the patched `install.ps1` (skills-copy fix, commit `c5f6877137`, PR #9).
+
+| # | Checklist item | Evidence |
+|---|----------------|----------|
+| 1 | `*.backup-<stamp>` exists & non-empty for each backup family (session/desktop/config/engram) | 3 install runs each produced all 4 backup families as sibling `*.backup-<stamp>` dirs + `.backup-complete`; verified non-empty (dir child-count / file `Length`), `$backupStamp` shared across families, originals never deleted |
+| 2 | `opencode-dev.db` has exactly one `Recordatorio cargar horas Redmine` with non-NULL `next_run_at` | `cron dedupe` collapsed duplicates (earliest `time_created` kept); exactly one enabled job with valid `next_run_at` present; verified via `opencode-dev.db` query after the green install |
+| 3 | Simulated skills failure → `Restore-ClientData` fires | Pre-fix run C (unpatched installer) reproduced the failure → FATAL → full restore of all 4 backup families fired correctly; post-fix green runs show **no** restore (recovery path exercised and clean) |
+| 4 | Custom user skill under `~/.config/opencode/skills` survives | Copy-only skills contract (B1): existing user skill DIRECTORIES are never deleted, only backed up + merged; green install preserved all user skills (flat corrupt FILEs from earlier buggy runs sanitized to `C:\Users\ivan\skills-corruptas-20260810`) |
+
+**Green-run evidence**: `C:\Users\ivan\install-script-test\run-b5-install.log` (2026-08-10 12:41:54, 42632 B) → `Installation complete!`, 16 repo skills installed as DIRECTORIES each with `SKILL.md` + `.installed-version`, 0 restore events. Copy preserved locally at `/tmp/opencode/evidence/run-b5-install.log`, sha256 `880fc8820bf0ce6e5d4d30da8ad0da5a859674d7f896fcb7d2ed356292c64e35`.
+
+**Bonus finding (resolved during this phase)**: `install.ps1` skills copy block — `Copy-Item "$src\*" -Destination $dest -Recurse -Force -Exclude "node_modules"` with absent `$dest` + `-Exclude` created `$dest` as a FILE (PowerShell rename semantics), corrupting flat skills into files and fatally failing multi-file skills ("container into leaf"). Fixed (ensure dest directory before wildcard copy); documented in repo AGENTS.md "Known Critical Bugs".
+
+### Bounded Review (4-lens) — Completed 2026-08-10
+
+The `bounded review transaction is missing` blocker was resolved with a native 4-lens review on the fork `gentle-ai 2.2.3` runtime.
+
+- **Lineage**: `review-7dbcb7e4ffc5bdb5` — state `approved`, receipt at `.git/gentle-ai/review-transactions/v2/review-7dbcb7e4ffc5bdb5/review-receipt.json`.
+- **Scope**: base `9b9de89695` (tree `7f212512…`), candidate tree `a4c2648b…`, 23 changed files / 3,277 changed lines.
+- **Lenses**: `review-risk`, `review-resilience`, `review-readability`, `review-reliability` (full 4R, risk-level high: update hot path, shell-process boundary).
+- **Result**: **26 findings, all WARNING/SUGGESTION — zero BLOCKER/CRITICAL**. No corrective remediation required (correction budget 200 untouched).
+  - R1 risk (7): cron dedupe hard-delete without dry-run; restore overlay TOCTOU (sidecar purge loses post-backup writes); Nextcloud token in git history (causal, pre-existing); 63 MB zips committed; restore marker pollution; doc token fragment; `sync-to-nextcloud.sh` calls `err()` before definition (line 24 vs 35).
+  - R4 resilience (5): CLI-only install never gates binary health (desktop install does); at-most-once loss invisible (advance before execute, executor has no logError); restore has no binary rollback; `getDueJobs` defect escapes catch (pre-existing); false restore alarm when source never existed.
+  - R2 readability (9): gate-code clutter; orphaned runtime harness (nothing invokes it in CI); duplicated zips; create/backfill/advance triplication; duplicated cron args; duplicated seed; dedupe placement; backup naming; size thresholds.
+  - R3 reliability (5): CI guard misses `it.live.only` (wrapper in `test/lib/effect.ts`); skills-copy fix untested; 3 vacuous assertions (`[\s\S]*`); Format-Row mimic drift in P4; dedupe lacks per-row isolation.
+- **Gate status**: `review validate --gate post-apply` reports `scope-changed` (not allow) because the frozen candidate tree predates the final apply-progress.md closure written below (33 lines) and HEAD moved since review creation. The runtime's `bind-sdd` path hits a fork bug (`compact post-apply gate is not allow` → `operation_outcome_unknown`, defect report `operation-outcome-unknown-517f22d8fc32.md`). Same 2.2.3 runtime limitation as the attempt blocker; the review evidence itself is complete.
+
+### SDD Runtime Blocker (documented, not SDD-caused)
+
+The change's native SDD runtime attempt (`4.1-manual-windows-check`, record `sha256:8f597675b5372c522fdb1dcd1aca054629787a6b02293969e0e64ea552f9e255`) cannot be closed by any available path on the fork `gentle-ai 2.2.3` runtime:
+
+- `finish`/`reset` → `SDD runtime request identifier was reused with different inputs` (request digest `sha256:1619c6d3…` computed from internals not reproducible via CLI).
+- `settle` with the acquire token (recovered from opencode.db part `prt_febb4cdf2001YTsDSdf6w2WWLB`, token = `sha256:8f597675…`) → `{"state":"blocked","reason":"invalid_continuation"}` (same result as the previous session's attempt).
+- Manual ledger `finish` write → `SDD runtime record is not canonical` (requires `finish_candidate_identity/tree` derived from unreproducible commits).
+
+The verify work itself is complete and evidence-backed; the ledger was left byte-exact pristine (only the `attempt/begin` record + consistent HEAD). Closing this change proceed via the SDD artifact path (tasks marked, apply-progress updated, verify/archive by SDD command), acknowledging the runtime harness limitation. `sdd-status` will keep reporting `resolve-blockers` for the runtime attempt and the post-apply gate until the fork runtime is updated or the ledger is manually reconciled.
