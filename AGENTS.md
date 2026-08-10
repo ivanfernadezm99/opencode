@@ -47,6 +47,21 @@ Examples: `fix(tui): simplify thinking toggle styling`, `docs: update contributi
 - The fork's channel name comes from `git branch --show-current` at build time; keep fork releases on a stable channel (or rely on `Migrate-SessionDatabase`) to avoid session-DB switches for clients.
 - Never delete `opencode-*.db` / `opencode.db` files — they hold the user's conversations. Recovery after a botched update: rename the newest `opencode-*.db.backup-*` back to `opencode-<channel>.db` (remove a stale `-wal`/`-shm` first), and restore `engram.db.backup-*` the same way.
 
+### install.ps1 skills install: flat FILE dests + "container into leaf" (2026-08-10)
+
+**Status**: RESOLVED — fixed in `install.ps1` (skills copy block).
+
+**Symptom**: A `-Desktop` install could fail at "Installing project skills" with `Could not install skills: No se puede copiar el contenedor en el elemento de hoja existente` (Copy-Item "container into leaf"), triggering the full `Restore-ClientData` rollback. On machines with previously-flattened skills, the same copy silently re-created flat-file skills (`baoyu-comic` etc. as single SKILL.md FILES instead of directories), so sanitizing the client alone could never go green — the installer re-created its own corruption every run.
+
+**Actual root cause**: `Copy-Item -Path "$($_.FullName)\*" -Destination $dest -Recurse -Force -Exclude "node_modules"` misbehaves when `$dest` does not exist: with `-Exclude` present, PowerShell creates `$dest` as a FILE from the first matched child (rename semantics), not as a directory. For flat skills (single SKILL.md child) this silently corrupts the skill into a file; for skills with subdirectories (e.g. p5js: README.md, SKILL.md, references/, scripts/, templates/) the first file child becomes the dest FILE and the next directory child fails with "container into leaf" → FATAL → restore. The "4 loose skill files" seen on the Windows client were this bug's residue from earlier runs.
+
+**Fix**: Before the wildcard copy, ensure `$dest` is a directory: if an existing dest is a flat FILE, back it up first (as always) then remove the leaf and rebuild as a dir; if `$dest` is absent, pre-create it with `New-Item -ItemType Directory`. The copy then merges children into a real directory. Verified on Windows (2026-08-10): with the fix + a sanitized `skills/`, the full install completes green — all 16 repo skills installed as directories with SKILL.md, `.installed-version` stamped, no restore fired, backups/cron unaffected.
+
+**Prevention notes**:
+- The fix keeps the copy-only B1 contract: a user's existing skill DIRECTORY is never deleted (only backed up + merged); only a corrupt flat FILE (preserved in `*.backup-<stamp>`) is removed.
+- Client-side recovery for older corrupted states: move flat skill FILES and partial skill dirs out of `~/.config/opencode/skills` (e.g. to `skills-corruptas-<date>` OUTSIDE the config dir, so the config backup/restore cannot reintroduce them) before re-running the installer.
+- Discovered during the `cron-update-safety` verify (checklist 4.1) on Windows; the backup/restore safety design (D8/R4) behaved correctly throughout — 3 failed runs each restored all 4 backup families (`*.backup-<stamp>` + `.backup-complete`), no sessions/engram data lost.
+
 ---
 
 ## Style Guide

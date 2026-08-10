@@ -381,7 +381,7 @@
     },
     "packages/desktop": {
       "name": "@opencode-ai/desktop",
-      "version": "1.18.12",
+      "version": "1.18.14",
       "dependencies": {
         "@zip.js/zip.js": "2.7.62",
         "effect": "catalog:",
